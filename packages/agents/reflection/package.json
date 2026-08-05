@@ -1,0 +1,21 @@
+{
+  "name": "@ama/agent-reflection",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@ama/agent-framework": "workspace:*",
+    "@ama/events": "workspace:*",
+    "@ama/memory": "workspace:*",
+    "@ama/learning": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/*.test.ts"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@ama/reference-scenario",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@ama/agent-framework": "workspace:*",
+    "@ama/memory": "workspace:*",
+    "@ama/knowledge-base": "workspace:*",
+    "@ama/tools": "workspace:*",
+    "@ama/events": "workspace:*",
+    "@ama/prompt-architecture": "workspace:*",
+    "@ama/cost-router": "workspace:*",
+    "@ama/workflow-engine": "workspace:*",
+    "@ama/agent-research": "workspace:*",
+    "@ama/agent-ppc": "workspace:*",
+    "@ama/agent-media-buyer": "workspace:*",
+    "@ama/agent-analytics": "workspace:*",
+    "@ama/agent-qa": "workspace:*",
+    "@ama/agent-report-generator": "workspace:*",
+    "@ama/agent-reflection": "workspace:*",
+    "@ama/learning": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

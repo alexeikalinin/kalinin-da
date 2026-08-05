@@ -1,0 +1,10 @@
+# @ama/memory
+
+Implements: docs/03-architecture/memory-system.md
+
+- `store.ts` — `MemoryStore`, an in-memory reference implementation of the CRUD table in Memory System §1: direct writes for session/task/project, propose→confirm for company/domain_kb/client_kb (Memory System §2 — an agent can never write Knowledge Base directly), and a Reflection-only path for Learning Memory. Tenant isolation (NFR-14) is enforced on every read/write except the shared Domain KB.
+- `agent-port.ts` — `createAgentMemoryPort` adapts a `MemoryStore` into the `MemoryPort` from `@ama/agent-framework`, scoped to one `InvocationContext` and a role's declared `memoryLevels` — this is where "a role only gets the levels it declared" (Agent Framework §1) becomes an enforced boundary instead of a claim in the role spec. Writes to gated levels are silently routed through `proposeFact` rather than rejected, matching Memory System §4's example. It also namespaces Task Memory keys by `taskId` and Project Memory keys by `projectId` (fixed 2026-08-05, found while wiring the second and third real agents together) — without this, two concurrent Tasks or Projects for the same tenant would silently overwrite each other's data under the same key. `@ama/prompt-architecture`'s `assemblePrompt` applies the same Project-key convention when reading project context.
+- `actor.ts` — who is asking (`agent` / `reflection` / `approver`), since write permission depends on it.
+- `store.ts` also implements Security §4/§5: `deleteAllForTenant` — the only path to deleting a tenant's data, requires an approver, leaves other tenants and the shared Domain KB untouched. There is deliberately no automatic TTL/cleanup anywhere in this package — logs and Project Memory are retained until explicitly deleted, per the doc's policy.
+
+Not yet implemented: persistence beyond process memory (Database — though `supabase/migrations/0001_init.sql` already models the same shape), the actual approval UI/flow that turns a human "yes" into a call to `confirmProposal`/`deleteAllForTenant` (API/Application Layer).

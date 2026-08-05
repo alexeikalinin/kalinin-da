@@ -1,0 +1,10 @@
+# @ama/agent-ppc
+
+Implements: docs/03-architecture/agent-framework.md (role: PPC Agent) — the first fully wired role, not a skeleton.
+
+- `ppc-agent.ts` — `createPpcAgent(callModel)`: the role's `defineAgent` spec (purpose/responsibility/completion criteria/memory levels/tool ids, matching Agent Framework §3's own worked example) plus a handler that calls the model, configures each requested channel through `ToolPort`, writes the decision to Task Memory, and returns the Success/Failed status per the Agent Framework §4 protocol.
+- `dispatch.ts` — `preparePpcInvocation`: stands in for what Workflow Engine's dispatch step will do — assemble the prompt (`@ama/prompt-architecture`), pick a model tier (`@ama/cost-router`), and build the scoped `MemoryPort`/`ToolPort` (`@ama/memory`/`@ama/tools`) — before the agent is ever invoked. No dedicated Workflow Engine dispatch package exists yet, so this lives here (same reasoning as Queue/Logging-Audit living inside an existing package).
+
+**What's real vs. injected:** memory, tool registry/credentials, prompt assembly, and model-tier selection are the actual implementations from earlier packages — this is genuine end-to-end wiring, not a mock of everything. The one thing that is *not* real: `PpcModelCaller`, the actual call to an LLM. No API credentials for any provider exist in this environment, so the "what should the budget split be" reasoning is supplied by a caller-provided function — in the tests, a fake that reads the assembled prompt's client facts and reacts to them, which is enough to prove the wiring carries real data through (see `integration.test.ts`: a Knowledge Base fact about a past VK Ads failure changes the actual tool calls made), without claiming an LLM call that isn't happening.
+
+`ppc-agent.test.ts` tests the handler in isolation (fake ports). `integration.test.ts` runs the full pipeline: a real `MemoryStore` with a confirmed Client KB fact → `preparePpcInvocation` → `agent.invoke` → real tool-call arguments and a real Task Memory write, checked end to end.

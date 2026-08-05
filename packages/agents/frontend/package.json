@@ -1,0 +1,24 @@
+{
+  "name": "@ama/agent-frontend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@ama/agent-framework": "workspace:*",
+    "@ama/memory": "workspace:*",
+    "@ama/knowledge-base": "workspace:*",
+    "@ama/tools": "workspace:*",
+    "@ama/prompt-architecture": "workspace:*",
+    "@ama/cost-router": "workspace:*",
+    "@ama/workflow-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/*.test.ts"
+  }
+}
