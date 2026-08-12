@@ -69,6 +69,7 @@ import { reflect } from "@ama/agent-reflection";
 import { AGENT_ACTOR, APPROVER, OWNER_TENANT_ID, getSingletons } from "./singletons.ts";
 import { isAnthropicConfigured } from "./anthropic.ts";
 import * as real from "./real-models.ts";
+import { realToolInvoker } from "./real-tools.ts";
 
 // 2026-08-12 — a real ANTHROPIC_API_KEY was provided. USE_REAL_MODELS is
 // evaluated once at module load: if a key is present, every role calls the
@@ -370,7 +371,7 @@ async function runNode(
         context: c, taskDescription: "Собрать данные о сайте и рынке.",
         siteUrl: record.input.siteUrl, searchQuery: record.input.marketingTask,
         complexity: record.executionTier === "fast" ? "routine" : "standard",
-        invokeTool: async () => "tool output",
+        invokeTool: realToolInvoker,
       });
       return createResearchAgent(USE_REAL_MODELS ? real.realResearch : fakeResearch).invoke(agentInput);
     }

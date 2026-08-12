@@ -86,8 +86,19 @@ export function realPm(availableRoleIds: readonly RoleId[]): PmModelCaller {
 }
 
 export const realResearch: ResearchModelCaller = async (prompt, modelId, siteContent, searchResults) => {
+  // site-reader/web-search now return real text (real-tools.ts) — fold it
+  // into clientFacts so the model actually sees it, instead of the tool
+  // output being fetched and then discarded.
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [
+      ...prompt.clientFacts,
+      `Содержимое сайта клиента (реальный скрейпинг):\n${String(siteContent)}`,
+      `Результаты веб-поиска по рынку/конкурентам:\n${String(searchResults)}`,
+    ],
+  };
   const out = await callClaudeForJson<{ summary: string; facts: string[]; decisionSummary: string }>(
-    prompt,
+    groundedPrompt,
     modelId,
     {
       name: "submit_findings",
@@ -103,8 +114,6 @@ export const realResearch: ResearchModelCaller = async (prompt, modelId, siteCon
       },
     },
   );
-  void siteContent;
-  void searchResults;
   return { findings: { summary: out.summary, facts: out.facts }, decisionSummary: out.decisionSummary };
 };
 
