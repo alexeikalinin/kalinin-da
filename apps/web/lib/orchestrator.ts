@@ -389,7 +389,7 @@ async function runNode(
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "PPC", responsibility: "PPC only" },
         context: c, taskDescription: "Настроить рекламные кампании.", clientFactKeys: [],
-        channels: ["google-ads", "vk-ads"], complexity: "standard", invokeTool: async () => "configured",
+        channels: ["google-ads", "vk-ads"], complexity: "standard", invokeTool: realToolInvoker,
       });
       return createPpcAgent(USE_REAL_MODELS ? real.realPpc : fakePpc).invoke(agentInput);
     }

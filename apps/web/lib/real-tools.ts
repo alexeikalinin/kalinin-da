@@ -1,6 +1,7 @@
 import { ToolUnavailableError, type ToolInvoker } from "@ama/tools";
 import { readSiteContent } from "./tools/site-reader.ts";
 import { isPerplexityConfigured, searchWeb } from "./tools/web-search.ts";
+import { createOrReusePausedCampaign, isGoogleAdsConfigured } from "./tools/google-ads.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -26,6 +27,19 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }
     }
+    case "google-ads": {
+      const { budgetShare } = args as { budgetShare: number };
+      if (!isGoogleAdsConfigured()) return "configured"; // graceful degrade, no credentials configured
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const result = await createOrReusePausedCampaign(`AMA Auto — ${today} — google-ads`, budgetShare);
+        return result;
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "vk-ads":
+      return "configured"; // not wired to a real provider yet
     default:
       throw new Error(`No real implementation wired for tool "${toolId}" yet.`);
   }
