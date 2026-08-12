@@ -2,6 +2,7 @@
   "name": "@ama/web",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -11,7 +12,29 @@
   "dependencies": {
     "next": "^15.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@ama/agent-framework": "workspace:*",
+    "@ama/memory": "workspace:*",
+    "@ama/knowledge-base": "workspace:*",
+    "@ama/tools": "workspace:*",
+    "@ama/events": "workspace:*",
+    "@ama/prompt-architecture": "workspace:*",
+    "@ama/cost-router": "workspace:*",
+    "@ama/workflow-engine": "workspace:*",
+    "@ama/agent-ceo": "workspace:*",
+    "@ama/agent-pm": "workspace:*",
+    "@ama/agent-research": "workspace:*",
+    "@ama/agent-seo": "workspace:*",
+    "@ama/agent-ppc": "workspace:*",
+    "@ama/agent-media-buyer": "workspace:*",
+    "@ama/agent-ux": "workspace:*",
+    "@ama/agent-ui-designer": "workspace:*",
+    "@ama/agent-copywriter": "workspace:*",
+    "@ama/agent-frontend": "workspace:*",
+    "@ama/agent-analytics": "workspace:*",
+    "@ama/agent-qa": "workspace:*",
+    "@ama/agent-report-generator": "workspace:*",
+    "@ama/agent-reflection": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

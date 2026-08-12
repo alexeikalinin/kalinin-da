@@ -14,6 +14,72 @@ importers:
 
   apps/web:
     dependencies:
+      '@ama/agent-analytics':
+        specifier: workspace:*
+        version: link:../../packages/agents/analytics
+      '@ama/agent-ceo':
+        specifier: workspace:*
+        version: link:../../packages/agents/ceo
+      '@ama/agent-copywriter':
+        specifier: workspace:*
+        version: link:../../packages/agents/copywriter
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../packages/agent-framework
+      '@ama/agent-frontend':
+        specifier: workspace:*
+        version: link:../../packages/agents/frontend
+      '@ama/agent-media-buyer':
+        specifier: workspace:*
+        version: link:../../packages/agents/media-buyer
+      '@ama/agent-pm':
+        specifier: workspace:*
+        version: link:../../packages/agents/pm
+      '@ama/agent-ppc':
+        specifier: workspace:*
+        version: link:../../packages/agents/ppc
+      '@ama/agent-qa':
+        specifier: workspace:*
+        version: link:../../packages/agents/qa
+      '@ama/agent-reflection':
+        specifier: workspace:*
+        version: link:../../packages/agents/reflection
+      '@ama/agent-report-generator':
+        specifier: workspace:*
+        version: link:../../packages/agents/report-generator
+      '@ama/agent-research':
+        specifier: workspace:*
+        version: link:../../packages/agents/research
+      '@ama/agent-seo':
+        specifier: workspace:*
+        version: link:../../packages/agents/seo
+      '@ama/agent-ui-designer':
+        specifier: workspace:*
+        version: link:../../packages/agents/ui-designer
+      '@ama/agent-ux':
+        specifier: workspace:*
+        version: link:../../packages/agents/ux
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../packages/cost-router
+      '@ama/events':
+        specifier: workspace:*
+        version: link:../../packages/events
+      '@ama/knowledge-base':
+        specifier: workspace:*
+        version: link:../../packages/knowledge-base
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../packages/prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../packages/workflow-engine
       next:
         specifier: ^15.0.0
         version: 15.5.22(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -102,6 +168,34 @@ importers:
         specifier: ^22.0.0
         version: 22.20.1
 
+  packages/agents/ceo:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/knowledge-base':
+        specifier: workspace:*
+        version: link:../../knowledge-base
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
   packages/agents/copywriter:
     dependencies:
       '@ama/agent-framework':
@@ -159,6 +253,34 @@ importers:
         version: 22.20.1
 
   packages/agents/media-buyer:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/knowledge-base':
+        specifier: workspace:*
+        version: link:../../knowledge-base
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
+  packages/agents/pm:
     dependencies:
       '@ama/agent-framework':
         specifier: workspace:*
