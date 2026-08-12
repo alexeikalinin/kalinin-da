@@ -9,6 +9,8 @@ const API_BASE = `https://googleads.googleapis.com/${API_VERSION}`;
 const DEFAULT_TOTAL_DAILY_BUDGET_MICROS = 10_000_000; // 10 currency units/day, placeholder default
 const MIN_DAILY_BUDGET_MICROS = 1_000_000; // 1 currency unit/day floor
 
+import { getGoogleAccessToken } from "./google-oauth.ts";
+
 function requiredEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not set`);
@@ -26,32 +28,8 @@ export function isGoogleAdsConfigured(): boolean {
   );
 }
 
-let cachedAccessToken: { token: string; expiresAt: number } | undefined;
-
-async function getAccessToken(): Promise<string> {
-  if (cachedAccessToken && cachedAccessToken.expiresAt > Date.now() + 30_000) {
-    return cachedAccessToken.token;
-  }
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: requiredEnv("GOOGLE_ADS_CLIENT_ID"),
-      client_secret: requiredEnv("GOOGLE_ADS_CLIENT_SECRET"),
-      refresh_token: requiredEnv("GOOGLE_ADS_REFRESH_TOKEN"),
-      grant_type: "refresh_token",
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(`Google OAuth token refresh failed: ${response.status} ${response.statusText}`);
-  }
-  const data = (await response.json()) as { access_token: string; expires_in: number };
-  cachedAccessToken = { token: data.access_token, expiresAt: Date.now() + data.expires_in * 1000 };
-  return data.access_token;
-}
-
 async function callGoogleAds(path: string, body: unknown): Promise<unknown> {
-  const accessToken = await getAccessToken();
+  const accessToken = await getGoogleAccessToken();
   const customerId = requiredEnv("GOOGLE_ADS_CUSTOMER_ID");
   const response = await fetch(`${API_BASE}/customers/${customerId}${path}`, {
     method: "POST",

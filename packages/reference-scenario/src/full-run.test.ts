@@ -234,6 +234,8 @@ test("the full reference scenario runs end to end through the real Workflow Engi
       if (analyticsAttempts === 1) throw new ToolUnavailableError("analytics API timeout");
       return { ctr: 0.05 };
     },
+    projectDisplayName: "Test Project",
+    siteUrl: "https://example.com",
   });
   state = withNodeState(state, "analytics-task", "queued");
   await bus.publish(

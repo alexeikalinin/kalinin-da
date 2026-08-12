@@ -445,7 +445,8 @@ async function runNode(
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "Analytics", responsibility: "Analytics only" },
         context: c, taskDescription: "Оценить эффективность кампаний.", clientFactKeys: [], projectContextKeys,
-        complexity: "standard", invokeTool: async () => ({ ctr: 0.05 }),
+        complexity: "standard", invokeTool: realToolInvoker,
+        projectDisplayName: `AMA — ${record.projectId}`, siteUrl: record.input.siteUrl,
       });
       return createAnalyticsAgent(USE_REAL_MODELS ? real.realAnalytics : fakeAnalytics).invoke(agentInput);
     }

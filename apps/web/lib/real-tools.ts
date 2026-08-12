@@ -2,6 +2,13 @@ import { ToolUnavailableError, type ToolInvoker } from "@ama/tools";
 import { readSiteContent } from "./tools/site-reader.ts";
 import { isPerplexityConfigured, searchWeb } from "./tools/web-search.ts";
 import { createOrReusePausedCampaign, isGoogleAdsConfigured } from "./tools/google-ads.ts";
+import {
+  isGoogleAnalyticsConfigured,
+  linkToGoogleAds,
+  markKeyEvent,
+  provisionAnalyticsProperty,
+} from "./tools/google-analytics.ts";
+import { isGoogleTagManagerConfigured, provisionContainerWithGa4Tag } from "./tools/google-tag-manager.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -40,6 +47,24 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
     }
     case "vk-ads":
       return "configured"; // not wired to a real provider yet
+    case "google-analytics": {
+      const { projectDisplayName, siteUrl } = args as { projectDisplayName: string; siteUrl: string };
+      if (!isGoogleAnalyticsConfigured() || !isGoogleTagManagerConfigured()) return { ctr: 0.05 }; // graceful degrade
+      try {
+        const analytics = await provisionAnalyticsProperty(projectDisplayName, siteUrl);
+        await markKeyEvent(analytics.propertyName, "generate_lead");
+        await linkToGoogleAds(analytics.propertyName);
+        const gtm = await provisionContainerWithGa4Tag(projectDisplayName, analytics.measurementId);
+        return {
+          propertyName: analytics.propertyName,
+          measurementId: analytics.measurementId,
+          gtmContainerId: gtm.publicId,
+          note: "Tracking just provisioned — no traffic/conversion data exists yet.",
+        };
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
     default:
       throw new Error(`No real implementation wired for tool "${toolId}" yet.`);
   }

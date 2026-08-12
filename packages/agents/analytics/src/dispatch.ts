@@ -23,6 +23,8 @@ export interface PrepareAnalyticsInvocationInput {
   readonly projectContextKeys: readonly string[];
   readonly complexity: TaskComplexity;
   readonly invokeTool: ToolInvoker;
+  readonly projectDisplayName: string;
+  readonly siteUrl: string;
 }
 
 export function prepareAnalyticsInvocation(input: PrepareAnalyticsInvocationInput) {
@@ -40,6 +42,12 @@ export function prepareAnalyticsInvocation(input: PrepareAnalyticsInvocationInpu
     toolIds: [ANALYTICS_TOOL_ID],
     complexity: input.complexity,
     invokeTool: input.invokeTool,
-    buildPayload: (prompt, modelId) => ({ prompt, modelId, analyticsToolId: ANALYTICS_TOOL_ID }),
+    buildPayload: (prompt, modelId) => ({
+      prompt,
+      modelId,
+      analyticsToolId: ANALYTICS_TOOL_ID,
+      projectDisplayName: input.projectDisplayName,
+      siteUrl: input.siteUrl,
+    }),
   });
 }

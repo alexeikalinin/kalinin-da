@@ -15,6 +15,8 @@ export interface AnalyticsTaskPayload {
   readonly prompt: PromptBlocks;
   readonly modelId: string;
   readonly analyticsToolId: string; // e.g. "google-analytics"
+  readonly projectDisplayName: string; // identifies the project's tracking resources (GA4 property, GTM container)
+  readonly siteUrl: string;
 }
 
 export type AnalyticsModelCaller = (
@@ -36,7 +38,10 @@ export function createAnalyticsAgent(callModel: AnalyticsModelCaller) {
     async handler(input: AgentInput<AnalyticsTaskPayload>): Promise<AgentOutput<AnalyticsReport>> {
       let rawMetrics: unknown;
       try {
-        rawMetrics = await input.tools.invoke(input.task.payload.analyticsToolId, {});
+        rawMetrics = await input.tools.invoke(input.task.payload.analyticsToolId, {
+          projectDisplayName: input.task.payload.projectDisplayName,
+          siteUrl: input.task.payload.siteUrl,
+        });
       } catch (error) {
         return { status: "failed", error: error as AgentError };
       }
