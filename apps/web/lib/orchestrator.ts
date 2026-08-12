@@ -67,6 +67,15 @@ import {
 } from "@ama/agent-report-generator";
 import { reflect } from "@ama/agent-reflection";
 import { AGENT_ACTOR, APPROVER, OWNER_TENANT_ID, getSingletons } from "./singletons.ts";
+import { isAnthropicConfigured } from "./anthropic.ts";
+import * as real from "./real-models.ts";
+
+// 2026-08-12 — a real ANTHROPIC_API_KEY was provided. USE_REAL_MODELS is
+// evaluated once at module load: if a key is present, every role calls the
+// actual model (lib/real-models.ts); if not, the fake* callers below still
+// work, so the app degrades gracefully rather than crashing when no key is
+// configured (e.g. CI, or a fresh clone without .env.local yet).
+const USE_REAL_MODELS = isAnthropicConfigured();
 
 // API/Application Layer §2 — the roles PM Agent is allowed to choose from
 // (the reference conveyor, minus the service roles CEO/PM/Agent
@@ -295,7 +304,7 @@ async function runPlanning(record: ProjectRecord): Promise<void> {
     complexity: "standard",
     invokeTool: async () => "unused",
   });
-  const ceoOutput = await createCeoAgent(fakeCeo).invoke(ceoInput);
+  const ceoOutput = await createCeoAgent(USE_REAL_MODELS ? real.realCeo : fakeCeo).invoke(ceoInput);
   if (ceoOutput.status !== "success") {
     throw new Error(`CEO planning failed: ${ceoOutput.status === "failed" ? ceoOutput.error.message : "needs revision"}`);
   }
@@ -313,7 +322,9 @@ async function runPlanning(record: ProjectRecord): Promise<void> {
     complexity: "standard",
     invokeTool: async () => "unused",
   });
-  const pmOutput = await createPmAgent(fakePm(record.input)).invoke(pmInput);
+  const pmOutput = await createPmAgent(
+    USE_REAL_MODELS ? real.realPm(AVAILABLE_ROLE_IDS) : fakePm(record.input),
+  ).invoke(pmInput);
   if (pmOutput.status !== "success") {
     throw new Error(`PM planning failed: ${pmOutput.status === "failed" ? pmOutput.error.message : "needs revision"}`);
   }
@@ -361,7 +372,7 @@ async function runNode(
         complexity: record.executionTier === "fast" ? "routine" : "standard",
         invokeTool: async () => "tool output",
       });
-      return createResearchAgent(fakeResearch).invoke(agentInput);
+      return createResearchAgent(USE_REAL_MODELS ? real.realResearch : fakeResearch).invoke(agentInput);
     }
     case "seo": {
       const { agentInput } = prepareSeoInvocation({
@@ -370,7 +381,7 @@ async function runNode(
         context: c, taskDescription: "Сформировать SEO-рекомендации.", clientFactKeys: [],
         siteUrl: record.input.siteUrl, complexity: "standard", invokeTool: async () => ({}),
       });
-      return createSeoAgent(fakeSeo).invoke(agentInput);
+      return createSeoAgent(USE_REAL_MODELS ? real.realSeo : fakeSeo).invoke(agentInput);
     }
     case "ppc": {
       const { agentInput } = preparePpcInvocation({
@@ -379,7 +390,7 @@ async function runNode(
         context: c, taskDescription: "Настроить рекламные кампании.", clientFactKeys: [],
         channels: ["google-ads", "vk-ads"], complexity: "standard", invokeTool: async () => "configured",
       });
-      return createPpcAgent(fakePpc).invoke(agentInput);
+      return createPpcAgent(USE_REAL_MODELS ? real.realPpc : fakePpc).invoke(agentInput);
     }
     case "media-buyer": {
       const { agentInput } = prepareMediaBuyerInvocation({
@@ -388,7 +399,7 @@ async function runNode(
         context: c, taskDescription: "Спланировать медиа-бюджет.", clientFactKeys: [],
         complexity: "standard", invokeTool: async () => "unused",
       });
-      return createMediaBuyerAgent(fakeMediaBuyer).invoke(agentInput);
+      return createMediaBuyerAgent(USE_REAL_MODELS ? real.realMediaBuyer : fakeMediaBuyer).invoke(agentInput);
     }
     case "ux": {
       const { agentInput } = prepareUxInvocation({
@@ -397,7 +408,7 @@ async function runNode(
         context: c, taskDescription: "Проработать пользовательские сценарии.", clientFactKeys: [],
         complexity: "standard", invokeTool: async () => "unused",
       });
-      return createUxAgent(fakeUx).invoke(agentInput);
+      return createUxAgent(USE_REAL_MODELS ? real.realUx : fakeUx).invoke(agentInput);
     }
     case "ui-designer": {
       const { agentInput } = prepareUiDesignerInvocation({
@@ -406,7 +417,7 @@ async function runNode(
         context: c, taskDescription: "Создать макеты.", clientFactKeys: [], projectContextKeys,
         complexity: "standard", invokeTool: async () => ({}),
       });
-      return createUiDesignerAgent(fakeUiDesigner).invoke(agentInput);
+      return createUiDesignerAgent(USE_REAL_MODELS ? real.realUiDesigner : fakeUiDesigner).invoke(agentInput);
     }
     case "copywriter": {
       const { agentInput } = prepareCopywriterInvocation({
@@ -415,7 +426,9 @@ async function runNode(
         context: c, taskDescription: "Написать тексты.", clientFactKeys: [],
         briefs: [record.input.marketingTask], complexity: "routine", invokeTool: async () => "unused",
       });
-      return createCopywriterAgent(fakeCopywriter(record.input)).invoke(agentInput);
+      return createCopywriterAgent(USE_REAL_MODELS ? real.realCopywriter : fakeCopywriter(record.input)).invoke(
+        agentInput,
+      );
     }
     case "frontend": {
       const { agentInput } = prepareFrontendInvocation({
@@ -424,7 +437,7 @@ async function runNode(
         context: c, taskDescription: "Опубликовать материалы.", materials: {},
         complexity: "standard", invokeTool: async () => ({ url: "https://dev-placeholder.example" }),
       });
-      return createFrontendAgent(fakeFrontend).invoke(agentInput);
+      return createFrontendAgent(USE_REAL_MODELS ? real.realFrontend : fakeFrontend).invoke(agentInput);
     }
     case "analytics": {
       const { agentInput } = prepareAnalyticsInvocation({
@@ -433,7 +446,7 @@ async function runNode(
         context: c, taskDescription: "Оценить эффективность кампаний.", clientFactKeys: [], projectContextKeys,
         complexity: "standard", invokeTool: async () => ({ ctr: 0.05 }),
       });
-      return createAnalyticsAgent(fakeAnalytics).invoke(agentInput);
+      return createAnalyticsAgent(USE_REAL_MODELS ? real.realAnalytics : fakeAnalytics).invoke(agentInput);
     }
     case "qa": {
       const depKey = projectContextKeys[0];
@@ -447,7 +460,7 @@ async function runNode(
         artifactToReview, checklistId: "general-checklist",
         complexity: "routine", invokeTool: async () => "unused",
       });
-      return createQaAgent(fakeQa).invoke(agentInput);
+      return createQaAgent(USE_REAL_MODELS ? real.realQa : fakeQa).invoke(agentInput);
     }
     case "report-generator": {
       const materialRefs: ReportMaterialRef[] = (record.graph?.nodes ?? [])
@@ -459,7 +472,7 @@ async function runNode(
         context: c, taskDescription: "Собрать итоговый отчёт.", materialRefs,
         complexity: "routine", invokeTool: async () => "unused",
       });
-      return createReportGeneratorAgent(fakeReport).invoke(agentInput);
+      return createReportGeneratorAgent(USE_REAL_MODELS ? real.realReport : fakeReport).invoke(agentInput);
     }
     default:
       throw new Error(`No dispatcher wired for role "${node.roleId}"`);

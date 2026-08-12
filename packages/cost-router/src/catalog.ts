@@ -21,12 +21,15 @@ export function createModelCatalog(entries: Record<ModelTier, CatalogEntry>): Mo
   };
 }
 
-// ADR-0003 — Anthropic on the first iteration. Real pricing is Stage 2
-// operational detail, deliberately not fixed here.
+// ADR-0003 — Anthropic on the first iteration. Real, current model ids
+// (2026-08-12, when apps/web was first wired to a real Anthropic key) —
+// previously placeholders ("claude-haiku" etc.) since no key existed to
+// call anything. Real pricing is still Stage 2 operational detail,
+// deliberately not fixed here.
 export function createAnthropicModelCatalog(): ModelCatalog {
   return createModelCatalog({
-    fast: { modelId: "claude-haiku", costPerCall: 0.01 },
-    base: { modelId: "claude-sonnet", costPerCall: 0.05 },
-    advanced: { modelId: "claude-opus", costPerCall: 0.2 },
+    fast: { modelId: "claude-haiku-4-5-20251001", costPerCall: 0.01 },
+    base: { modelId: "claude-sonnet-5", costPerCall: 0.05 },
+    advanced: { modelId: "claude-opus-5", costPerCall: 0.2 },
   });
 }
