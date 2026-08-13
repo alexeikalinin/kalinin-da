@@ -20,6 +20,7 @@ export interface PreparePpcInvocationInput {
   readonly channels: readonly string[];
   readonly complexity: TaskComplexity;
   readonly invokeTool: ToolInvoker;
+  readonly googleAdsCustomerId?: string;
 }
 
 // Thin, role-specific wrapper over @ama/workflow-engine's generic
@@ -38,6 +39,11 @@ export function preparePpcInvocation(input: PreparePpcInvocationInput) {
     toolIds: input.channels,
     complexity: input.complexity,
     invokeTool: input.invokeTool,
-    buildPayload: (prompt, modelId) => ({ prompt, modelId, channels: input.channels }),
+    buildPayload: (prompt, modelId) => ({
+      prompt,
+      modelId,
+      channels: input.channels,
+      googleAdsCustomerId: input.googleAdsCustomerId,
+    }),
   });
 }

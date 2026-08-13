@@ -41,8 +41,11 @@ interface GtmContainer {
   readonly name: string;
 }
 
-async function findContainerByName(name: string): Promise<GtmContainer | undefined> {
-  const accountId = requiredEnv("GOOGLE_GTM_ACCOUNT_ID");
+function resolveGtmAccountId(accountId: string | undefined): string {
+  return accountId ?? requiredEnv("GOOGLE_GTM_ACCOUNT_ID");
+}
+
+async function findContainerByName(name: string, accountId: string): Promise<GtmContainer | undefined> {
   const data = (await callGtm(`/accounts/${accountId}/containers`, "GET")) as { container?: GtmContainer[] };
   return data.container?.find((c) => c.name === name);
 }
@@ -60,13 +63,14 @@ export interface ProvisionedContainer {
 export async function provisionContainerWithGa4Tag(
   projectDisplayName: string,
   measurementId: string,
+  gtmAccountId?: string,
 ): Promise<ProvisionedContainer> {
-  const existing = await findContainerByName(projectDisplayName);
+  const accountId = resolveGtmAccountId(gtmAccountId);
+  const existing = await findContainerByName(projectDisplayName, accountId);
   if (existing) {
     return { containerPath: existing.path, publicId: existing.publicId, reused: true };
   }
 
-  const accountId = requiredEnv("GOOGLE_GTM_ACCOUNT_ID");
   const container = (await callGtm(`/accounts/${accountId}/containers`, "POST", {
     name: projectDisplayName,
     usageContext: ["web"],

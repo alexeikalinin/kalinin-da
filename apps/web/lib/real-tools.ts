@@ -35,11 +35,15 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
       }
     }
     case "google-ads": {
-      const { budgetShare } = args as { budgetShare: number };
+      const { budgetShare, googleAdsCustomerId } = args as { budgetShare: number; googleAdsCustomerId?: string };
       if (!isGoogleAdsConfigured()) return "configured"; // graceful degrade, no credentials configured
       try {
         const today = new Date().toISOString().slice(0, 10);
-        const result = await createOrReusePausedCampaign(`AMA Auto — ${today} — google-ads`, budgetShare);
+        const result = await createOrReusePausedCampaign(
+          `AMA Auto — ${today} — google-ads`,
+          budgetShare,
+          googleAdsCustomerId,
+        );
         return result;
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
@@ -48,13 +52,19 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
     case "vk-ads":
       return "configured"; // not wired to a real provider yet
     case "google-analytics": {
-      const { projectDisplayName, siteUrl } = args as { projectDisplayName: string; siteUrl: string };
+      const { projectDisplayName, siteUrl, gtmAccountId, gaAccountId, googleAdsCustomerId } = args as {
+        projectDisplayName: string;
+        siteUrl: string;
+        gtmAccountId?: string;
+        gaAccountId?: string;
+        googleAdsCustomerId?: string;
+      };
       if (!isGoogleAnalyticsConfigured() || !isGoogleTagManagerConfigured()) return { ctr: 0.05 }; // graceful degrade
       try {
-        const analytics = await provisionAnalyticsProperty(projectDisplayName, siteUrl);
+        const analytics = await provisionAnalyticsProperty(projectDisplayName, siteUrl, gaAccountId);
         await markKeyEvent(analytics.propertyName, "generate_lead");
-        await linkToGoogleAds(analytics.propertyName);
-        const gtm = await provisionContainerWithGa4Tag(projectDisplayName, analytics.measurementId);
+        await linkToGoogleAds(analytics.propertyName, googleAdsCustomerId);
+        const gtm = await provisionContainerWithGa4Tag(projectDisplayName, analytics.measurementId, gtmAccountId);
         return {
           propertyName: analytics.propertyName,
           measurementId: analytics.measurementId,

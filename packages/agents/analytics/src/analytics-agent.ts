@@ -17,6 +17,12 @@ export interface AnalyticsTaskPayload {
   readonly analyticsToolId: string; // e.g. "google-analytics"
   readonly projectDisplayName: string; // identifies the project's tracking resources (GA4 property, GTM container)
   readonly siteUrl: string;
+  // The client's own accounts, if known — falls back to the agency's
+  // sandbox account when a Project doesn't supply these (see
+  // real-tools.ts).
+  readonly gtmAccountId?: string;
+  readonly gaAccountId?: string;
+  readonly googleAdsCustomerId?: string;
 }
 
 export type AnalyticsModelCaller = (
@@ -41,6 +47,9 @@ export function createAnalyticsAgent(callModel: AnalyticsModelCaller) {
         rawMetrics = await input.tools.invoke(input.task.payload.analyticsToolId, {
           projectDisplayName: input.task.payload.projectDisplayName,
           siteUrl: input.task.payload.siteUrl,
+          gtmAccountId: input.task.payload.gtmAccountId,
+          gaAccountId: input.task.payload.gaAccountId,
+          googleAdsCustomerId: input.task.payload.googleAdsCustomerId,
         });
       } catch (error) {
         return { status: "failed", error: error as AgentError };

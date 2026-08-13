@@ -15,8 +15,10 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+// Only checks that a fallback GA account exists somewhere — the actual
+// per-Project accountId/customerId are resolved lazily below.
 export function isGoogleAnalyticsConfigured(): boolean {
-  return Boolean(process.env.GOOGLE_GA_ACCOUNT_ID && process.env.GOOGLE_ADS_CUSTOMER_ID);
+  return Boolean(process.env.GOOGLE_GA_ACCOUNT_ID);
 }
 
 async function callAnalyticsAdmin(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
@@ -38,8 +40,11 @@ interface GaProperty {
   readonly displayName: string;
 }
 
-async function findPropertyByName(displayName: string): Promise<GaProperty | undefined> {
-  const accountId = requiredEnv("GOOGLE_GA_ACCOUNT_ID");
+function resolveGaAccountId(accountId: string | undefined): string {
+  return accountId ?? requiredEnv("GOOGLE_GA_ACCOUNT_ID");
+}
+
+async function findPropertyByName(displayName: string, accountId: string): Promise<GaProperty | undefined> {
   const data = (await callAnalyticsAdmin(
     `/properties?filter=${encodeURIComponent(`parent:accounts/${accountId}`)}`,
     "GET",
@@ -58,8 +63,10 @@ export interface ProvisionedAnalytics {
 export async function provisionAnalyticsProperty(
   projectDisplayName: string,
   siteUrl: string,
+  gaAccountId?: string,
 ): Promise<ProvisionedAnalytics> {
-  const existing = await findPropertyByName(projectDisplayName);
+  const accountId = resolveGaAccountId(gaAccountId);
+  const existing = await findPropertyByName(projectDisplayName, accountId);
   if (existing) {
     const streams = (await callAnalyticsAdmin(`/${existing.name}/dataStreams`, "GET")) as {
       dataStreams?: Array<{ webStreamData?: { measurementId?: string } }>;
@@ -68,7 +75,6 @@ export async function provisionAnalyticsProperty(
     if (measurementId) return { propertyName: existing.name, measurementId, reused: true };
   }
 
-  const accountId = requiredEnv("GOOGLE_GA_ACCOUNT_ID");
   const property = (await callAnalyticsAdmin("/properties", "POST", {
     parent: `accounts/${accountId}`,
     displayName: projectDisplayName,
@@ -103,8 +109,8 @@ export async function markKeyEvent(propertyName: string, eventName: string): Pro
 // Links the GA4 property to the Google Ads customer so its key events
 // become available to import as Ads conversions. Idempotent for the same
 // reason as markKeyEvent.
-export async function linkToGoogleAds(propertyName: string): Promise<void> {
-  const customerId = requiredEnv("GOOGLE_ADS_CUSTOMER_ID");
+export async function linkToGoogleAds(propertyName: string, adsCustomerId?: string): Promise<void> {
+  const customerId = adsCustomerId ?? requiredEnv("GOOGLE_ADS_CUSTOMER_ID");
   try {
     await callAnalyticsAdmin(`/${propertyName}/googleAdsLinks`, "POST", {
       customerId,

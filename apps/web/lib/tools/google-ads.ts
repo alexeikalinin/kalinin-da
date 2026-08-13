@@ -17,20 +17,25 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+// Only checks the agency-wide app credentials — the target customerId is
+// now per-Project (falls back to GOOGLE_ADS_CUSTOMER_ID if a Project
+// doesn't supply its own, checked lazily by resolveCustomerId).
 export function isGoogleAdsConfigured(): boolean {
   return Boolean(
     process.env.GOOGLE_ADS_CLIENT_ID &&
       process.env.GOOGLE_ADS_CLIENT_SECRET &&
       process.env.GOOGLE_ADS_REFRESH_TOKEN &&
       process.env.GOOGLE_ADS_DEVELOPER_TOKEN &&
-      process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID &&
-      process.env.GOOGLE_ADS_CUSTOMER_ID,
+      process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID,
   );
 }
 
-async function callGoogleAds(path: string, body: unknown): Promise<unknown> {
+function resolveCustomerId(customerId: string | undefined): string {
+  return customerId ?? requiredEnv("GOOGLE_ADS_CUSTOMER_ID");
+}
+
+async function callGoogleAds(customerId: string, path: string, body: unknown): Promise<unknown> {
   const accessToken = await getGoogleAccessToken();
-  const customerId = requiredEnv("GOOGLE_ADS_CUSTOMER_ID");
   const response = await fetch(`${API_BASE}/customers/${customerId}${path}`, {
     method: "POST",
     headers: {
@@ -54,8 +59,12 @@ interface GaqlSearchResponse {
   }>;
 }
 
-export async function listCampaigns(): Promise<GaqlSearchResponse["results"]> {
-  const data = (await callGoogleAds("/googleAds:search", {
+// customerId — the client's Google Ads account (falls back to
+// GOOGLE_ADS_CUSTOMER_ID, the agency's own sandbox, when a Project doesn't
+// supply its own). login-customer-id (the agency's MCC) always stays fixed.
+export async function listCampaigns(customerId?: string): Promise<GaqlSearchResponse["results"]> {
+  const resolvedCustomerId = resolveCustomerId(customerId);
+  const data = (await callGoogleAds(resolvedCustomerId, "/googleAds:search", {
     query: "SELECT campaign.id, campaign.name, campaign.status FROM campaign LIMIT 50",
   })) as GaqlSearchResponse;
   return data.results ?? [];
@@ -68,12 +77,13 @@ export async function listCampaigns(): Promise<GaqlSearchResponse["results"]> {
 export async function createOrReusePausedCampaign(
   name: string,
   budgetShare: number,
+  customerId?: string,
 ): Promise<{ readonly campaignResourceName: string; readonly reused: boolean }> {
-  const existing = await listCampaigns();
+  const resolvedCustomerId = resolveCustomerId(customerId);
+  const existing = await listCampaigns(resolvedCustomerId);
   const match = existing?.find((r) => r.campaign?.name === name);
   if (match?.campaign?.id) {
-    const customerId = requiredEnv("GOOGLE_ADS_CUSTOMER_ID");
-    return { campaignResourceName: `customers/${customerId}/campaigns/${match.campaign.id}`, reused: true };
+    return { campaignResourceName: `customers/${resolvedCustomerId}/campaigns/${match.campaign.id}`, reused: true };
   }
 
   const dailyBudgetMicros = Math.max(
@@ -81,7 +91,7 @@ export async function createOrReusePausedCampaign(
     Math.round(DEFAULT_TOTAL_DAILY_BUDGET_MICROS * budgetShare),
   );
 
-  const budgetData = (await callGoogleAds("/campaignBudgets:mutate", {
+  const budgetData = (await callGoogleAds(resolvedCustomerId, "/campaignBudgets:mutate", {
     operations: [
       {
         create: {
@@ -94,7 +104,7 @@ export async function createOrReusePausedCampaign(
   })) as { results: ReadonlyArray<{ resourceName: string }> };
   const budgetResourceName = budgetData.results[0].resourceName;
 
-  const campaignData = (await callGoogleAds("/campaigns:mutate", {
+  const campaignData = (await callGoogleAds(resolvedCustomerId, "/campaigns:mutate", {
     operations: [
       {
         create: {

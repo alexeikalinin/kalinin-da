@@ -25,6 +25,9 @@ export interface PrepareAnalyticsInvocationInput {
   readonly invokeTool: ToolInvoker;
   readonly projectDisplayName: string;
   readonly siteUrl: string;
+  readonly gtmAccountId?: string;
+  readonly gaAccountId?: string;
+  readonly googleAdsCustomerId?: string;
 }
 
 export function prepareAnalyticsInvocation(input: PrepareAnalyticsInvocationInput) {
@@ -48,6 +51,9 @@ export function prepareAnalyticsInvocation(input: PrepareAnalyticsInvocationInpu
       analyticsToolId: ANALYTICS_TOOL_ID,
       projectDisplayName: input.projectDisplayName,
       siteUrl: input.siteUrl,
+      gtmAccountId: input.gtmAccountId,
+      gaAccountId: input.gaAccountId,
+      googleAdsCustomerId: input.googleAdsCustomerId,
     }),
   });
 }

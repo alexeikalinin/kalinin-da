@@ -124,6 +124,13 @@ export interface ProjectInput {
   readonly businessDescription: string;
   readonly product: string;
   readonly marketingTask: string;
+  // Per-client integration ids — API/Application Layer §2, decision
+  // 2026-08-13: real Google Ads/GTM/GA4 access is per-client, not a single
+  // global account (Tool Integration real-tools.ts falls back to the
+  // agency's own sandbox account when a project doesn't supply these).
+  readonly googleAdsCustomerId?: string;
+  readonly gtmAccountId?: string;
+  readonly gaAccountId?: string;
 }
 
 export interface ProjectRecord {
@@ -390,6 +397,7 @@ async function runNode(
         template: { roleId: c.roleId, version: 1, purpose: "PPC", responsibility: "PPC only" },
         context: c, taskDescription: "Настроить рекламные кампании.", clientFactKeys: [],
         channels: ["google-ads", "vk-ads"], complexity: "standard", invokeTool: realToolInvoker,
+        googleAdsCustomerId: record.input.googleAdsCustomerId,
       });
       return createPpcAgent(USE_REAL_MODELS ? real.realPpc : fakePpc).invoke(agentInput);
     }
@@ -447,6 +455,8 @@ async function runNode(
         context: c, taskDescription: "Оценить эффективность кампаний.", clientFactKeys: [], projectContextKeys,
         complexity: "standard", invokeTool: realToolInvoker,
         projectDisplayName: `AMA — ${record.projectId}`, siteUrl: record.input.siteUrl,
+        gtmAccountId: record.input.gtmAccountId, gaAccountId: record.input.gaAccountId,
+        googleAdsCustomerId: record.input.googleAdsCustomerId,
       });
       return createAnalyticsAgent(USE_REAL_MODELS ? real.realAnalytics : fakeAnalytics).invoke(agentInput);
     }

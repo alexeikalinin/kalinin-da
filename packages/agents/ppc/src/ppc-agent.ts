@@ -15,6 +15,7 @@ export interface PpcTaskPayload {
   readonly prompt: PromptBlocks;
   readonly modelId: string;
   readonly channels: readonly string[];
+  readonly googleAdsCustomerId?: string; // the client's own Ads account, if known
 }
 
 // The actual LLM call is injected. This package wires the contract
@@ -51,6 +52,7 @@ export function createPpcAgent(callModel: PpcModelCaller) {
         try {
           await input.tools.invoke(channel, {
             budgetShare: outcome.result.budgetSplit[channel] ?? 0,
+            googleAdsCustomerId: input.task.payload.googleAdsCustomerId,
           });
         } catch (error) {
           // Tool Integration §4 — createAgentToolPort already throws
