@@ -121,6 +121,7 @@ test("Analytics reads PPC's archived output through Project Memory", async () =>
     invokeTool: async () => ({ ctr: 0.05 }),
     projectDisplayName: "Test Project",
     siteUrl: "https://example.com",
+    analyticsToolIds: ["google-analytics"],
   });
 
   const analyticsOutput = await createAnalyticsAgent(analyticsCallModel).invoke(analyticsInput);

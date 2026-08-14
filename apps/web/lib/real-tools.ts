@@ -9,6 +9,8 @@ import {
   provisionAnalyticsProperty,
 } from "./tools/google-analytics.ts";
 import { isGoogleTagManagerConfigured, provisionContainerWithGa4Tag } from "./tools/google-tag-manager.ts";
+import { createOrReusePausedCampaign as createOrReuseYandexCampaign, isYandexConfigured } from "./tools/yandex-direct.ts";
+import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -51,6 +53,35 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
     }
     case "vk-ads":
       return "configured"; // not wired to a real provider yet
+    case "yandex-direct": {
+      const { budgetShare, yandexClientLogin } = args as { budgetShare: number; yandexClientLogin?: string };
+      if (!isYandexConfigured()) return "configured"; // graceful degrade, no credentials configured
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const result = await createOrReuseYandexCampaign(
+          `AMA Auto — ${today} — yandex-direct`,
+          budgetShare,
+          yandexClientLogin,
+        );
+        return result;
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "yandex-metrika": {
+      const { projectDisplayName, siteUrl } = args as { projectDisplayName: string; siteUrl: string };
+      if (!isYandexConfigured()) return { ctr: 0.05 }; // graceful degrade
+      try {
+        const counter = await provisionCounter(projectDisplayName, siteUrl);
+        await createGoal(counter.counterId, "generate_lead");
+        return {
+          counterId: counter.counterId,
+          note: "Tracking just provisioned — no traffic/conversion data exists yet.",
+        };
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
     case "google-analytics": {
       const { projectDisplayName, siteUrl, gtmAccountId, gaAccountId, googleAdsCustomerId } = args as {
         projectDisplayName: string;

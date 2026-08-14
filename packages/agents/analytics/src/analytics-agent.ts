@@ -14,8 +14,8 @@ export interface AnalyticsReport {
 export interface AnalyticsTaskPayload {
   readonly prompt: PromptBlocks;
   readonly modelId: string;
-  readonly analyticsToolId: string; // e.g. "google-analytics"
-  readonly projectDisplayName: string; // identifies the project's tracking resources (GA4 property, GTM container)
+  readonly analyticsToolIds: readonly string[]; // e.g. ["google-analytics", "yandex-metrika"]
+  readonly projectDisplayName: string; // identifies the project's tracking resources (GA4 property, GTM container, Metrika counter)
   readonly siteUrl: string;
   // The client's own accounts, if known — falls back to the agency's
   // sandbox account when a Project doesn't supply these (see
@@ -39,18 +39,20 @@ export function createAnalyticsAgent(callModel: AnalyticsModelCaller) {
     responsibility: "Только анализ и отчётность по уже запущенным кампаниям, не их настройка.",
     completionCriteria: "Отчёт проходит проверку QA Agent.",
     memoryLevels: ["task", "project", "client_kb"],
-    toolIds: ["google-analytics"],
+    toolIds: ["google-analytics", "yandex-metrika"],
 
     async handler(input: AgentInput<AnalyticsTaskPayload>): Promise<AgentOutput<AnalyticsReport>> {
-      let rawMetrics: unknown;
+      const rawMetrics: Record<string, unknown> = {};
       try {
-        rawMetrics = await input.tools.invoke(input.task.payload.analyticsToolId, {
-          projectDisplayName: input.task.payload.projectDisplayName,
-          siteUrl: input.task.payload.siteUrl,
-          gtmAccountId: input.task.payload.gtmAccountId,
-          gaAccountId: input.task.payload.gaAccountId,
-          googleAdsCustomerId: input.task.payload.googleAdsCustomerId,
-        });
+        for (const toolId of input.task.payload.analyticsToolIds) {
+          rawMetrics[toolId] = await input.tools.invoke(toolId, {
+            projectDisplayName: input.task.payload.projectDisplayName,
+            siteUrl: input.task.payload.siteUrl,
+            gtmAccountId: input.task.payload.gtmAccountId,
+            gaAccountId: input.task.payload.gaAccountId,
+            googleAdsCustomerId: input.task.payload.googleAdsCustomerId,
+          });
+        }
       } catch (error) {
         return { status: "failed", error: error as AgentError };
       }

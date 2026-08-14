@@ -7,7 +7,7 @@ import { prepareAgentInvocation } from "@ama/workflow-engine";
 import type { AnalyticsTaskPayload } from "./analytics-agent.ts";
 
 const MEMORY_LEVELS = ["task", "project", "client_kb"] as const;
-const ANALYTICS_TOOL_ID = "google-analytics";
+const DEFAULT_ANALYTICS_TOOL_IDS = ["google-analytics", "yandex-metrika"] as const;
 
 export interface PrepareAnalyticsInvocationInput {
   readonly store: MemoryStore;
@@ -28,9 +28,11 @@ export interface PrepareAnalyticsInvocationInput {
   readonly gtmAccountId?: string;
   readonly gaAccountId?: string;
   readonly googleAdsCustomerId?: string;
+  readonly analyticsToolIds?: readonly string[];
 }
 
 export function prepareAnalyticsInvocation(input: PrepareAnalyticsInvocationInput) {
+  const analyticsToolIds = input.analyticsToolIds ?? DEFAULT_ANALYTICS_TOOL_IDS;
   return prepareAgentInvocation<AnalyticsTaskPayload>({
     store: input.store,
     registry: input.registry,
@@ -42,13 +44,13 @@ export function prepareAnalyticsInvocation(input: PrepareAnalyticsInvocationInpu
     clientFactKeys: input.clientFactKeys,
     projectContextKeys: input.projectContextKeys,
     memoryLevels: [...MEMORY_LEVELS],
-    toolIds: [ANALYTICS_TOOL_ID],
+    toolIds: [...analyticsToolIds],
     complexity: input.complexity,
     invokeTool: input.invokeTool,
     buildPayload: (prompt, modelId) => ({
       prompt,
       modelId,
-      analyticsToolId: ANALYTICS_TOOL_ID,
+      analyticsToolIds,
       projectDisplayName: input.projectDisplayName,
       siteUrl: input.siteUrl,
       gtmAccountId: input.gtmAccountId,

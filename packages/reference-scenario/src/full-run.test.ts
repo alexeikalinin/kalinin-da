@@ -236,6 +236,7 @@ test("the full reference scenario runs end to end through the real Workflow Engi
     },
     projectDisplayName: "Test Project",
     siteUrl: "https://example.com",
+    analyticsToolIds: ["google-analytics"],
   });
   state = withNodeState(state, "analytics-task", "queued");
   await bus.publish(

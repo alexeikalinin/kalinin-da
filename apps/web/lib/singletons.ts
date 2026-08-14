@@ -48,7 +48,9 @@ function createSingletons(): Singletons {
     "seo-service",
     "google-ads",
     "vk-ads",
+    "yandex-direct",
     "google-analytics",
+    "yandex-metrika",
     "design-tool",
     "deployment-tool",
   ];

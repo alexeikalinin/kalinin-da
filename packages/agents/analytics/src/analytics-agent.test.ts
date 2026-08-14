@@ -33,7 +33,10 @@ const emptyPrompt = {
 test("reads raw metrics from the analytics tool before calling the model", async () => {
   const toolCalls: string[] = [];
   const callModel: AnalyticsModelCaller = async (_prompt, _modelId, rawMetrics) => ({
-    report: { summary: "OK", metrics: { ctr: (rawMetrics as { ctr: number }).ctr } },
+    report: {
+      summary: "OK",
+      metrics: { ctr: (rawMetrics as Record<string, { ctr: number }>)["google-analytics"].ctr },
+    },
     decisionSummary: "CTR в норме.",
   });
 
@@ -41,7 +44,7 @@ test("reads raw metrics from the analytics tool before calling the model", async
   const output = await agent.invoke({
     task: {
       context: context(),
-      payload: { prompt: emptyPrompt, modelId: "x", analyticsToolId: "google-analytics", projectDisplayName: "Test Project", siteUrl: "https://example.com" },
+      payload: { prompt: emptyPrompt, modelId: "x", analyticsToolIds: ["google-analytics"], projectDisplayName: "Test Project", siteUrl: "https://example.com" },
     },
     memory: { read: async () => undefined, write: async () => {} },
     tools: {
@@ -70,7 +73,7 @@ test("a tool failure fetching metrics is reported as a failed Task, without ever
   const output = await agent.invoke({
     task: {
       context: context(),
-      payload: { prompt: emptyPrompt, modelId: "x", analyticsToolId: "google-analytics", projectDisplayName: "Test Project", siteUrl: "https://example.com" },
+      payload: { prompt: emptyPrompt, modelId: "x", analyticsToolIds: ["google-analytics"], projectDisplayName: "Test Project", siteUrl: "https://example.com" },
     },
     memory: { read: async () => undefined, write: async () => {} },
     tools: {
