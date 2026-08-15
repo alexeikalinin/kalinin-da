@@ -39,7 +39,7 @@ export function createAnalyticsAgent(callModel: AnalyticsModelCaller) {
     responsibility: "Только анализ и отчётность по уже запущенным кампаниям, не их настройка.",
     completionCriteria: "Отчёт проходит проверку QA Agent.",
     memoryLevels: ["task", "project", "client_kb"],
-    toolIds: ["google-analytics", "yandex-metrika"],
+    toolIds: ["google-analytics", "yandex-metrika", "datalens"],
 
     async handler(input: AgentInput<AnalyticsTaskPayload>): Promise<AgentOutput<AnalyticsReport>> {
       const rawMetrics: Record<string, unknown> = {};

@@ -51,6 +51,7 @@ function createSingletons(): Singletons {
     "yandex-direct",
     "google-analytics",
     "yandex-metrika",
+    "datalens",
     "design-tool",
     "deployment-tool",
   ];

@@ -7,7 +7,7 @@ import { prepareAgentInvocation } from "@ama/workflow-engine";
 import type { AnalyticsTaskPayload } from "./analytics-agent.ts";
 
 const MEMORY_LEVELS = ["task", "project", "client_kb"] as const;
-const DEFAULT_ANALYTICS_TOOL_IDS = ["google-analytics", "yandex-metrika"] as const;
+const DEFAULT_ANALYTICS_TOOL_IDS = ["google-analytics", "yandex-metrika", "datalens"] as const;
 
 export interface PrepareAnalyticsInvocationInput {
   readonly store: MemoryStore;

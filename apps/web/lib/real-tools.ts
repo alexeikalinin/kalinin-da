@@ -11,6 +11,7 @@ import {
 import { isGoogleTagManagerConfigured, provisionContainerWithGa4Tag } from "./tools/google-tag-manager.ts";
 import { createOrReusePausedCampaign as createOrReuseYandexCampaign, isYandexConfigured } from "./tools/yandex-direct.ts";
 import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
+import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -101,6 +102,19 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
           measurementId: analytics.measurementId,
           gtmContainerId: gtm.publicId,
           note: "Tracking just provisioned — no traffic/conversion data exists yet.",
+        };
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "datalens": {
+      const { projectDisplayName } = args as { projectDisplayName: string };
+      if (!isDataLensConfigured()) return { ctr: 0.05 }; // graceful degrade
+      try {
+        const workbook = await provisionWorkbook(projectDisplayName);
+        return {
+          workbookId: workbook.workbookId,
+          note: "Workbook provisioned — datasets/charts/dashboards are not built yet, this is the container only.",
         };
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
