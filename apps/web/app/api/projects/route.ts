@@ -28,6 +28,8 @@ export async function POST(request: Request) {
     googleAdsCustomerId: typeof body.googleAdsCustomerId === "string" ? body.googleAdsCustomerId : undefined,
     gtmAccountId: typeof body.gtmAccountId === "string" ? body.gtmAccountId : undefined,
     gaAccountId: typeof body.gaAccountId === "string" ? body.gaAccountId : undefined,
+    yandexClientLogin: typeof body.yandexClientLogin === "string" ? body.yandexClientLogin : undefined,
+    metaAdAccountId: typeof body.metaAdAccountId === "string" ? body.metaAdAccountId : undefined,
   };
   const approvalLevel = body.approvalLevel === "output-only" ? "output-only" : "strategy-gate";
   const executionTier = body.executionTier === "fast" ? "fast" : "standard";

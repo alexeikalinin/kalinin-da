@@ -10,6 +10,7 @@ import {
 } from "./tools/google-analytics.ts";
 import { isGoogleTagManagerConfigured, provisionContainerWithGa4Tag } from "./tools/google-tag-manager.ts";
 import { createOrReusePausedCampaign as createOrReuseYandexCampaign, isYandexConfigured } from "./tools/yandex-direct.ts";
+import { createOrReusePausedCampaign as createOrReuseMetaCampaign, isMetaAdsConfigured } from "./tools/meta-ads.ts";
 import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
 import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
 
@@ -54,6 +55,17 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
     }
     case "vk-ads":
       return "configured"; // not wired to a real provider yet
+    case "meta-ads": {
+      const { metaAdAccountId } = args as { metaAdAccountId?: string };
+      if (!isMetaAdsConfigured()) return "configured"; // graceful degrade, no credentials configured
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const result = await createOrReuseMetaCampaign(`AMA Auto — ${today} — meta-ads`, metaAdAccountId);
+        return result;
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
     case "yandex-direct": {
       const { budgetShare, yandexClientLogin } = args as { budgetShare: number; yandexClientLogin?: string };
       if (!isYandexConfigured()) return "configured"; // graceful degrade, no credentials configured

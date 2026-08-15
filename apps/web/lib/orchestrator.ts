@@ -132,6 +132,7 @@ export interface ProjectInput {
   readonly gtmAccountId?: string;
   readonly gaAccountId?: string;
   readonly yandexClientLogin?: string;
+  readonly metaAdAccountId?: string;
 }
 
 export interface ProjectRecord {
@@ -397,9 +398,10 @@ async function runNode(
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "PPC", responsibility: "PPC only" },
         context: c, taskDescription: "Настроить рекламные кампании.", clientFactKeys: [],
-        channels: ["google-ads", "vk-ads", "yandex-direct"], complexity: "standard", invokeTool: realToolInvoker,
+        channels: ["google-ads", "vk-ads", "yandex-direct", "meta-ads"], complexity: "standard", invokeTool: realToolInvoker,
         googleAdsCustomerId: record.input.googleAdsCustomerId,
         yandexClientLogin: record.input.yandexClientLogin,
+        metaAdAccountId: record.input.metaAdAccountId,
       });
       return createPpcAgent(USE_REAL_MODELS ? real.realPpc : fakePpc).invoke(agentInput);
     }

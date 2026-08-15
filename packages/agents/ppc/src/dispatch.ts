@@ -22,6 +22,7 @@ export interface PreparePpcInvocationInput {
   readonly invokeTool: ToolInvoker;
   readonly googleAdsCustomerId?: string;
   readonly yandexClientLogin?: string;
+  readonly metaAdAccountId?: string;
 }
 
 // Thin, role-specific wrapper over @ama/workflow-engine's generic
@@ -46,6 +47,7 @@ export function preparePpcInvocation(input: PreparePpcInvocationInput) {
       channels: input.channels,
       googleAdsCustomerId: input.googleAdsCustomerId,
       yandexClientLogin: input.yandexClientLogin,
+      metaAdAccountId: input.metaAdAccountId,
     }),
   });
 }

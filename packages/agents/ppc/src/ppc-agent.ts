@@ -17,6 +17,7 @@ export interface PpcTaskPayload {
   readonly channels: readonly string[];
   readonly googleAdsCustomerId?: string; // the client's own Ads account, if known
   readonly yandexClientLogin?: string; // the client's own Yandex Direct login, if known
+  readonly metaAdAccountId?: string; // the client's own Meta ad account (format `act_<id>`), if known
 }
 
 // The actual LLM call is injected. This package wires the contract
@@ -36,7 +37,7 @@ export function createPpcAgent(callModel: PpcModelCaller) {
       "Только настройка кампаний, не медиапланирование бюджета (Media Buyer Agent) и не тексты объявлений (Copywriter Agent).",
     completionCriteria: "Результат проходит проверку QA Agent по чек-листу качества PPC-раздела.",
     memoryLevels: ["task", "project", "client_kb"],
-    toolIds: ["google-ads", "vk-ads", "yandex-direct"],
+    toolIds: ["google-ads", "vk-ads", "yandex-direct", "meta-ads"],
 
     async handler(input: AgentInput<PpcTaskPayload>): Promise<AgentOutput<PpcResult>> {
       let outcome: Awaited<ReturnType<PpcModelCaller>>;
@@ -55,6 +56,7 @@ export function createPpcAgent(callModel: PpcModelCaller) {
             budgetShare: outcome.result.budgetSplit[channel] ?? 0,
             googleAdsCustomerId: input.task.payload.googleAdsCustomerId,
             yandexClientLogin: input.task.payload.yandexClientLogin,
+            metaAdAccountId: input.task.payload.metaAdAccountId,
           });
         } catch (error) {
           // Tool Integration §4 — createAgentToolPort already throws

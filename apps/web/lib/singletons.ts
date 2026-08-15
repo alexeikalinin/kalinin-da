@@ -49,6 +49,7 @@ function createSingletons(): Singletons {
     "google-ads",
     "vk-ads",
     "yandex-direct",
+    "meta-ads",
     "google-analytics",
     "yandex-metrika",
     "datalens",
