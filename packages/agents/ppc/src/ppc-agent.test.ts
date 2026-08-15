@@ -43,7 +43,7 @@ test("a successful call configures every requested channel and records the decis
   const output = await agent.invoke({
     task: {
       context: context(),
-      payload: { prompt: emptyPrompt, modelId: "claude-sonnet", channels: ["google-ads", "vk-ads"] },
+      payload: { prompt: emptyPrompt, modelId: "claude-sonnet", channels: ["google-ads", "vk-ads"], siteUrl: "https://example.com" },
     },
     memory: {
       read: async () => undefined,
@@ -75,7 +75,7 @@ test("a failed model call is reported as a failed Task, not thrown", async () =>
 
   const agent = createPpcAgent(callModel);
   const output = await agent.invoke({
-    task: { context: context(), payload: { prompt: emptyPrompt, modelId: "x", channels: [] } },
+    task: { context: context(), payload: { prompt: emptyPrompt, modelId: "x", channels: [], siteUrl: "https://example.com" } },
     memory: { read: async () => undefined, write: async () => {} },
     tools: { invoke: async () => "ok" },
   });
@@ -94,7 +94,7 @@ test("a tool failure is reported as a failed Task", async () => {
 
   const agent = createPpcAgent(callModel);
   const output = await agent.invoke({
-    task: { context: context(), payload: { prompt: emptyPrompt, modelId: "x", channels: ["google-ads"] } },
+    task: { context: context(), payload: { prompt: emptyPrompt, modelId: "x", channels: ["google-ads"], siteUrl: "https://example.com" } },
     memory: { read: async () => undefined, write: async () => {} },
     tools: {
       invoke: async () => {

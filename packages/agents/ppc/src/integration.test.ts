@@ -91,6 +91,7 @@ test("PPC Agent, assembled from memory + tools + prompt architecture + cost rout
     channels: ["google-ads", "vk-ads"],
     complexity: "standard",
     invokeTool,
+    siteUrl: "https://example.com",
   });
 
   // standard complexity -> base tier, nudged down one step by strategy-gate (Cost Optimization §1) -> fast

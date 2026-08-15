@@ -18,6 +18,7 @@ export interface PpcTaskPayload {
   readonly googleAdsCustomerId?: string; // the client's own Ads account, if known
   readonly yandexClientLogin?: string; // the client's own Yandex Direct login, if known
   readonly metaAdAccountId?: string; // the client's own Meta ad account (format `act_<id>`), if known
+  readonly siteUrl: string; // needed by vk-ads to register the ad-object URL (see tools/vk-ads.ts)
 }
 
 // The actual LLM call is injected. This package wires the contract
@@ -57,6 +58,7 @@ export function createPpcAgent(callModel: PpcModelCaller) {
             googleAdsCustomerId: input.task.payload.googleAdsCustomerId,
             yandexClientLogin: input.task.payload.yandexClientLogin,
             metaAdAccountId: input.task.payload.metaAdAccountId,
+            siteUrl: input.task.payload.siteUrl,
           });
         } catch (error) {
           // Tool Integration §4 — createAgentToolPort already throws

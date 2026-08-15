@@ -170,6 +170,7 @@ test("the full reference scenario runs end to end through the real Workflow Engi
     channels: ["google-ads", "vk-ads"],
     complexity: "standard",
     invokeTool: async () => "configured",
+    siteUrl: "https://example.com",
   });
   const { agentInput: mediaBuyerInput } = prepareMediaBuyerInvocation({
     store,

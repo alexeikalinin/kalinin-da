@@ -402,6 +402,7 @@ async function runNode(
         googleAdsCustomerId: record.input.googleAdsCustomerId,
         yandexClientLogin: record.input.yandexClientLogin,
         metaAdAccountId: record.input.metaAdAccountId,
+        siteUrl: record.input.siteUrl,
       });
       return createPpcAgent(USE_REAL_MODELS ? real.realPpc : fakePpc).invoke(agentInput);
     }

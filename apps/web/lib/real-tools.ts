@@ -11,6 +11,7 @@ import {
 import { isGoogleTagManagerConfigured, provisionContainerWithGa4Tag } from "./tools/google-tag-manager.ts";
 import { createOrReusePausedCampaign as createOrReuseYandexCampaign, isYandexConfigured } from "./tools/yandex-direct.ts";
 import { createOrReusePausedCampaign as createOrReuseMetaCampaign, isMetaAdsConfigured } from "./tools/meta-ads.ts";
+import { createOrReusePausedCampaign as createOrReuseVkCampaign, isVkAdsConfigured } from "./tools/vk-ads.ts";
 import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
 import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
 
@@ -53,8 +54,17 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }
     }
-    case "vk-ads":
-      return "configured"; // not wired to a real provider yet
+    case "vk-ads": {
+      const { siteUrl } = args as { siteUrl: string };
+      if (!isVkAdsConfigured()) return "configured"; // graceful degrade, no credentials configured
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const result = await createOrReuseVkCampaign(`AMA Auto — ${today} — vk-ads`, siteUrl);
+        return result;
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
     case "meta-ads": {
       const { metaAdAccountId } = args as { metaAdAccountId?: string };
       if (!isMetaAdsConfigured()) return "configured"; // graceful degrade, no credentials configured

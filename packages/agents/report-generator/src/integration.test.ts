@@ -53,6 +53,7 @@ test("Report Generator assembles a real PPC decision into the final Project Outp
     taskDescription: "Configure campaigns.",
     clientFactKeys: [],
     channels: ["google-ads", "vk-ads"],
+    siteUrl: "https://example.com",
     complexity: "standard",
     invokeTool: async () => "configured",
   });

@@ -69,6 +69,7 @@ test("Analytics reads PPC's archived output through Project Memory", async () =>
     channels: ["google-ads", "vk-ads"],
     complexity: "standard",
     invokeTool: async () => "configured",
+    siteUrl: "https://example.com",
   });
   const ppcOutput = await createPpcAgent(ppcCallModel).invoke(ppcInput);
   assert.equal(ppcOutput.status, "success");
