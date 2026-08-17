@@ -14,6 +14,7 @@ export function serializeProject(record: ProjectRecord) {
     plan: record.graph?.nodes.map((n) => ({ taskId: n.taskId, roleId: n.roleId, dependsOn: n.dependsOn })),
     progress: record.graphState ? Object.fromEntries(record.graphState.states) : undefined,
     hasOutput: Boolean(record.output),
+    workflowRunId: record.workflowRunId,
     rejectionComments: record.rejectionComments,
     reworkComments: record.reworkComments,
     createdAt: record.createdAt,

@@ -7,33 +7,15 @@ import {
   type AgentOutput,
   type ApprovalLevel,
   type ExecutionTier,
-  type ProjectId,
   type RoleId,
 } from "@ama/agent-framework";
 import {
   approvePlan as approvePlanState,
-  buildGraph,
-  getReadyNodes,
   initialGraphState,
-  isGraphComplete,
   rejectPlan as rejectPlanState,
   statusAfterPlanBuilt,
-  withNodeState,
-  type GraphState,
-  type PlanStatus,
-  type WorkflowGraph,
 } from "@ama/workflow-engine";
-import {
-  planApproved,
-  planReady,
-  planRejected,
-  projectCompleted,
-  projectCreated,
-  taskQueued,
-  taskStarted,
-  taskSucceeded,
-  type WorkflowEvent,
-} from "@ama/events";
+import { planApproved, planReady, planRejected, projectCreated } from "@ama/events";
 import { createCeoAgent, prepareCeoInvocation, type CeoModelCaller } from "@ama/agent-ceo";
 import { createPmAgent, preparePmInvocation, type PmModelCaller } from "@ama/agent-pm";
 import { createResearchAgent, prepareResearchInvocation, type ResearchModelCaller } from "@ama/agent-research";
@@ -65,11 +47,26 @@ import {
   type ReportMaterialRef,
   type ReportModelCaller,
 } from "@ama/agent-report-generator";
-import { reflect } from "@ama/agent-reflection";
 import { AGENT_ACTOR, APPROVER, OWNER_TENANT_ID, getSingletons } from "./singletons.ts";
 import { isAnthropicConfigured } from "./anthropic.ts";
 import * as real from "./real-models.ts";
 import { realToolInvoker } from "./real-tools.ts";
+import {
+  ROLE_OUTPUT,
+  getProject,
+  listProjects,
+  projectsMap,
+  relativeProjectMemoryKey,
+  type ProjectInput,
+  type ProjectRecord,
+} from "./project-store.ts";
+
+// Re-exported for existing route handlers, which import these from
+// orchestrator.ts — the actual definitions now live in project-store.ts
+// (split out so lib/workflows/execute-project.ts, a Workflow DevKit "use
+// workflow" module, doesn't have to statically import this whole file, which
+// transitively uses Node.js built-ins the workflow compiler rejects).
+export { getProject, listProjects, ROLE_OUTPUT, type ProjectInput, type ProjectRecord };
 
 // 2026-08-12 — a real ANTHROPIC_API_KEY was provided. USE_REAL_MODELS is
 // evaluated once at module load: if a key is present, every role calls the
@@ -94,75 +91,6 @@ const AVAILABLE_ROLE_IDS: readonly RoleId[] = [
   "qa",
   "report-generator",
 ].map(asRoleId);
-
-// Which memory level + key each role writes its result under (see each
-// role's own source for the write call this mirrors). Needed here because
-// the orchestrator — unlike a single hand-written test — has to route an
-// arbitrary role's archived output to whichever role reads it next.
-const ROLE_OUTPUT: Record<string, { level: "task" | "project"; key: string }> = {
-  research: { level: "task", key: "findings" },
-  seo: { level: "task", key: "seo-recommendations" },
-  ppc: { level: "task", key: "campaign-summary" },
-  "media-buyer": { level: "project", key: "media-budget-plan" },
-  ux: { level: "project", key: "ux-plan" },
-  "ui-designer": { level: "task", key: "ui-design" },
-  copywriter: { level: "task", key: "copy-draft" },
-  frontend: { level: "task", key: "deployment" },
-  analytics: { level: "project", key: "analytics-report" },
-  qa: { level: "project", key: "qa-verdict" },
-  "report-generator": { level: "project", key: "project-output" },
-};
-
-function relativeProjectMemoryKey(roleId: string, taskId: string): string {
-  const spec = ROLE_OUTPUT[roleId];
-  if (!spec) throw new Error(`Unknown role output convention for "${roleId}"`);
-  return spec.level === "task" ? `${taskId}:${spec.key}` : spec.key;
-}
-
-export interface ProjectInput {
-  readonly siteUrl: string;
-  readonly businessDescription: string;
-  readonly product: string;
-  readonly marketingTask: string;
-  // Per-client integration ids — API/Application Layer §2, decision
-  // 2026-08-13: real Google Ads/GTM/GA4 access is per-client, not a single
-  // global account (Tool Integration real-tools.ts falls back to the
-  // agency's own sandbox account when a project doesn't supply these).
-  readonly googleAdsCustomerId?: string;
-  readonly gtmAccountId?: string;
-  readonly gaAccountId?: string;
-  readonly yandexClientLogin?: string;
-  readonly metaAdAccountId?: string;
-}
-
-export interface ProjectRecord {
-  readonly projectId: ProjectId;
-  readonly input: ProjectInput;
-  readonly approvalLevel: ApprovalLevel;
-  readonly executionTier: ExecutionTier;
-  planStatus: PlanStatus;
-  graph?: WorkflowGraph;
-  graphState?: GraphState;
-  output?: ProjectOutput;
-  planSummary?: string;
-  rejectionComments: string[];
-  reworkComments: string[];
-  createdAt: number;
-}
-
-const globalForProjects = globalThis as unknown as { __amaProjects__?: Map<string, ProjectRecord> };
-function projectsMap(): Map<string, ProjectRecord> {
-  if (!globalForProjects.__amaProjects__) globalForProjects.__amaProjects__ = new Map();
-  return globalForProjects.__amaProjects__;
-}
-
-export function getProject(projectId: string): ProjectRecord | undefined {
-  return projectsMap().get(projectId);
-}
-
-export function listProjects(): readonly ProjectRecord[] {
-  return [...projectsMap().values()];
-}
 
 function ctx(record: ProjectRecord, taskId: string, roleId: string) {
   return createInvocationContext({
@@ -360,8 +288,9 @@ export async function rejectAndReplan(record: ProjectRecord, comment: string): P
 
 // Dispatches a single Task to its real role package. This switch is the
 // one place in the whole codebase that has to know about every role at
-// once — every other package only knows its own contract.
-async function runNode(
+// once — every other package only knows its own contract. Exported so
+// lib/workflows/execute-project.ts's steps can call it.
+export async function runNode(
   record: ProjectRecord,
   node: { taskId: string; roleId: string; dependsOn: readonly string[] },
 ): Promise<AgentOutput<unknown>> {
@@ -496,71 +425,19 @@ async function runNode(
   }
 }
 
-// Executes the whole graph to completion. No Recovery loop here yet (a
-// node failure just throws) — @ama/reference-scenario already proves the
-// retry/escalate/block policy works, wiring it into this synchronous
-// executor is the next real piece of work, not done here.
-export async function executeGraph(record: ProjectRecord): Promise<void> {
-  if (!record.graph || !record.graphState) throw new Error("Project has no plan yet");
-  const { bus } = getSingletons();
-  let state = record.graphState;
-  const results = new Map<string, AgentOutput<unknown>>();
+// Graph execution moved to lib/workflows/execute-project.ts (a real
+// Workflow DevKit durable workflow, started via start() from the approve
+// route) — this file no longer runs the graph itself. See that module for
+// the retry/escalate/block Recovery wiring and finalize* steps that replace
+// what a single synchronous executeGraph() used to do inline here.
 
-  while (!isGraphComplete(record.graph, state)) {
-    const ready = getReadyNodes(record.graph, state);
-    if (ready.length === 0) throw new Error("Graph is stuck — no ready nodes but not complete");
-
-    for (const node of ready) {
-      state = withNodeState(state, node.taskId, "queued");
-      await bus.publish(
-        taskQueued({ tenantId: OWNER_TENANT_ID, projectId: record.projectId, taskId: asTaskId(node.taskId), roleId: asRoleId(node.roleId) }),
-      );
-    }
-
-    await Promise.all(
-      ready.map(async (node) => {
-        state = withNodeState(state, node.taskId, "running");
-        await bus.publish(
-          taskStarted({ tenantId: OWNER_TENANT_ID, projectId: record.projectId, taskId: asTaskId(node.taskId), roleId: asRoleId(node.roleId) }),
-        );
-        const output = await runNode(record, node);
-        if (output.status !== "success") {
-          throw new Error(`Task "${node.taskId}" (${node.roleId}) did not succeed: ${output.status}`);
-        }
-        results.set(node.taskId, output);
-        state = withNodeState(state, node.taskId, "succeeded");
-        if (ROLE_OUTPUT[node.roleId]?.level === "task") {
-          getSingletons().store.archiveTaskIntoProject(AGENT_ACTOR, node.taskId, record.projectId);
-        }
-        await bus.publish(
-          taskSucceeded(
-            { tenantId: OWNER_TENANT_ID, projectId: record.projectId, taskId: asTaskId(node.taskId), roleId: asRoleId(node.roleId) },
-            output.decisions,
-          ),
-        );
-      }),
-    );
-  }
-
-  record.graphState = state;
-  const reportNode = record.graph.nodes.find((n) => n.roleId === "report-generator");
-  const reportResult = reportNode ? results.get(reportNode.taskId) : undefined;
-  record.output = reportResult?.status === "success" ? (reportResult.result as ProjectOutput) : undefined;
-  record.planStatus = "completed";
-  await bus.publish(projectCompleted({ tenantId: OWNER_TENANT_ID, projectId: record.projectId }));
-
-  const { log } = getSingletons();
-  const projectEvents: WorkflowEvent[] = log.entries
-    .map((e) => e.event)
-    .filter((e) => "projectId" in e && e.projectId === record.projectId);
-  reflect(getSingletons().store, { kind: "reflection", tenantId: OWNER_TENANT_ID }, OWNER_TENANT_ID, record.projectId, projectEvents);
-}
-
-export async function approveAndExecute(record: ProjectRecord): Promise<void> {
+// Flips the plan to "executing" and publishes planApproved — kept as a
+// fast, synchronous step in the approve route's own request (unlike graph
+// execution, this has no reason to be a durable step).
+export async function approveProjectAndPublish(record: ProjectRecord): Promise<void> {
   const { bus } = getSingletons();
   approveProject(record);
   await bus.publish(planApproved({ tenantId: OWNER_TENANT_ID, projectId: record.projectId }));
-  await executeGraph(record);
 }
 
 // FR-5 — simplified: re-runs only Report Generator against the current

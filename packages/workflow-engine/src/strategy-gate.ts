@@ -1,11 +1,16 @@
 import type { ApprovalLevel } from "@ama/agent-framework";
 
-// Workflow Engine §3.
+// Workflow Engine §3. "failed"/"blocked" are terminal states reached during
+// execution (Recovery §3's escalate/block outcomes) — set directly by the
+// workflow executor (apps/web/lib/workflows/execute-project.ts), not by any
+// transition function in this file.
 export type PlanStatus =
   | "building"
   | "awaiting_approval"
   | "executing"
-  | "completed";
+  | "completed"
+  | "failed"
+  | "blocked";
 
 export function statusAfterPlanBuilt(approvalLevel: ApprovalLevel): PlanStatus {
   return approvalLevel === "strategy-gate" ? "awaiting_approval" : "executing";

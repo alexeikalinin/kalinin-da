@@ -10,3 +10,4 @@ supabase/.temp/
 *.tsbuildinfo
 apps/web/secrets/
 *.pem
+.workflow-data/

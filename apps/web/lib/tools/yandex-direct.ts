@@ -5,8 +5,12 @@
 import { getYandexAccessToken, isYandexConfigured } from "./yandex-oauth.ts";
 
 const API_BASE = "https://api.direct.yandex.com/json/v5";
-const DEFAULT_TOTAL_DAILY_BUDGET_MICROS = 10_000_000; // 10 currency units/day, placeholder default
-const MIN_DAILY_BUDGET_MICROS = 1_000_000; // 1 currency unit/day floor — Direct's own minimum is higher per currency, adjusted on error
+const DEFAULT_TOTAL_DAILY_BUDGET_MICROS = 20_000_000; // 20 currency units/day, placeholder default
+// Direct API v5 rejects DailyBudget below 9 currency units (error code 5005,
+// "Значение поля DailyBudget должно быть в диапазоне от 9 до 1000000000") —
+// found for real 2026-08-17 while testing the async workflow runner's
+// retry/escalate path (a real bug, not an intentional forced failure).
+const MIN_DAILY_BUDGET_MICROS = 9_000_000;
 
 export { isYandexConfigured };
 

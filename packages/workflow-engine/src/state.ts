@@ -49,6 +49,17 @@ export function isGraphComplete(graph: WorkflowGraph, state: GraphState): boolea
   return graph.nodes.every((node) => state.states.get(node.taskId) === "succeeded");
 }
 
+// Recovery §3: a node left in "failed" (escalate — retries exhausted) or
+// "blocked" (a non-retryable error) halts the graph permanently — neither
+// state resolves on its own, so the executor's main loop must stop rather
+// than spin forever waiting for a node that will never reach "succeeded".
+export function hasHaltedNode(graph: WorkflowGraph, state: GraphState): boolean {
+  return graph.nodes.some((node) => {
+    const nodeState = state.states.get(node.taskId);
+    return nodeState === "failed" || nodeState === "blocked";
+  });
+}
+
 // Queue §4: a Task picked up but not finished in time goes back to "pending"
 // so any free instance of the same role can pick it up again.
 export function requeueStuckTask(state: GraphState, taskId: string): GraphState {
