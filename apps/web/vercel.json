@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-ad-stats",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
