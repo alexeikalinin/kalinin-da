@@ -3,6 +3,7 @@
 // every created campaign is immediately suspended — nothing here ever
 // enables real ad spend.
 import { getYandexAccessToken, isYandexConfigured } from "./yandex-oauth.ts";
+import { parseTsv } from "./tsv.ts";
 
 const API_BASE = "https://api.direct.yandex.com/json/v5";
 const DEFAULT_TOTAL_DAILY_BUDGET_MICROS = 20_000_000; // 20 currency units/day, placeholder default
@@ -16,10 +17,18 @@ export { isYandexConfigured };
 
 // clientLogin — the client's Yandex login, required only in agency mode
 // (acting on behalf of a client account under an agency login). Personal
-// account use omits it.
-async function callDirect(resource: string, method: string, params: unknown, clientLogin?: string): Promise<unknown> {
+// account use omits it. accessTokenEnv — which identity's token to use
+// (client ad-account reporting foundation, 2026-08-18); defaults to the
+// original single-tenant YANDEX_ACCESS_TOKEN via yandex-oauth.ts.
+async function callDirect(
+  resource: string,
+  method: string,
+  params: unknown,
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<unknown> {
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${getYandexAccessToken()}`,
+    Authorization: `Bearer ${getYandexAccessToken(accessTokenEnv)}`,
     "Accept-Language": "ru",
     "Content-Type": "application/json; charset=utf-8",
   };
@@ -44,12 +53,13 @@ interface DirectCampaign {
   readonly State: string;
 }
 
-export async function listCampaigns(clientLogin?: string): Promise<readonly DirectCampaign[]> {
+export async function listCampaigns(clientLogin?: string, accessTokenEnv?: string): Promise<readonly DirectCampaign[]> {
   const result = (await callDirect(
     "campaigns",
     "get",
     { SelectionCriteria: {}, FieldNames: ["Id", "Name", "Status", "State"] },
     clientLogin,
+    accessTokenEnv,
   )) as { Campaigns: DirectCampaign[] };
   return result.Campaigns ?? [];
 }
@@ -100,4 +110,82 @@ export async function createOrReusePausedCampaign(
   await callDirect("campaigns", "suspend", { SelectionCriteria: { Ids: [added.Id] } }, clientLogin);
 
   return { campaignId: added.Id, reused: false };
+}
+
+export interface DirectCampaignReportRow {
+  readonly campaignId: string;
+  readonly campaignName: string;
+  readonly cost: number;
+  readonly impressions: number;
+  readonly clicks: number;
+  readonly conversionsByGoal: Record<string, number>;
+}
+
+// Reports API (a separate resource from the JSON campaigns.get/add/suspend
+// methods used above) — one request returns campaign metrics AND per-goal
+// conversion columns together (Yandex bakes goal columns directly into the
+// TSV, unlike Google Ads' two-query split — see google-ads.ts's
+// getCampaignReport comment). Real gotchas found 2026-08-18 building the
+// Медавеню report: `CampaignStatus` is NOT a valid field for
+// CAMPAIGN_PERFORMANCE_REPORT (400 "неверное значение перечисления"); the
+// API can also legitimately respond 201/202 with a Retry-After-style delay
+// while the report is generated — this function does not yet retry on
+// that (real accounts so far always returned 200 synchronously within a
+// normal request timeout, but a busy/large report could still 202).
+export async function getCampaignReport(
+  clientLogin: string | undefined,
+  params: { readonly startDate: string; readonly endDate: string; readonly goalIds: readonly string[] },
+  accessTokenEnv?: string,
+): Promise<readonly DirectCampaignReportRow[]> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${getYandexAccessToken(accessTokenEnv)}`,
+    "Accept-Language": "ru",
+    "Content-Type": "application/json",
+    processingMode: "auto",
+    returnMoneyInMicros: "false",
+  };
+  if (clientLogin) headers["Client-Login"] = clientLogin;
+
+  const response = await fetch(`${API_BASE}/reports`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      params: {
+        SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate },
+        Goals: params.goalIds,
+        FieldNames: ["CampaignId", "CampaignName", "Impressions", "Clicks", "Cost", "Conversions"],
+        ReportName: `ama-report-${Date.now()}`,
+        ReportType: "CAMPAIGN_PERFORMANCE_REPORT",
+        DateRangeType: "CUSTOM_DATE",
+        Format: "TSV",
+        IncludeVAT: "NO",
+        IncludeDiscount: "NO",
+      },
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Yandex Direct Reports API call failed: ${response.status} ${text}`);
+  }
+
+  // First line is the report title ("Report <id> (<from> - <to>)"), not a
+  // TSV header — skip it before handing off to the generic parser.
+  const withoutTitle = text.slice(text.indexOf("\n") + 1);
+  const rows = parseTsv(withoutTitle);
+
+  return rows.map((row) => {
+    const conversionsByGoal: Record<string, number> = {};
+    for (const goalId of params.goalIds) {
+      const value = row[`Conversions_${goalId}_LSCCD`];
+      conversionsByGoal[goalId] = value && value !== "--" ? Number(value) : 0;
+    }
+    return {
+      campaignId: row.CampaignId,
+      campaignName: row.CampaignName,
+      cost: Number(row.Cost || 0),
+      impressions: Number(row.Impressions || 0),
+      clicks: Number(row.Clicks || 0),
+      conversionsByGoal,
+    };
+  });
 }

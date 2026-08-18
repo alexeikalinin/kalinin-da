@@ -6,11 +6,14 @@ import { getYandexAccessToken } from "./yandex-oauth.ts";
 
 const MANAGEMENT_API_BASE = "https://api-metrika.yandex.net/management/v1";
 
-async function callMetrika(path: string, method: "GET" | "POST", body?: unknown): Promise<unknown> {
+// accessTokenEnv — which identity's token to use (client ad-account
+// reporting foundation, 2026-08-18); defaults to the original
+// single-tenant YANDEX_ACCESS_TOKEN via yandex-oauth.ts.
+async function callMetrika(path: string, method: "GET" | "POST", body?: unknown, accessTokenEnv?: string): Promise<unknown> {
   const response = await fetch(`${MANAGEMENT_API_BASE}${path}`, {
     method,
     headers: {
-      Authorization: `OAuth ${getYandexAccessToken()}`,
+      Authorization: `OAuth ${getYandexAccessToken(accessTokenEnv)}`,
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -25,6 +28,7 @@ async function callMetrika(path: string, method: "GET" | "POST", body?: unknown)
 interface MetrikaCounter {
   readonly id: number;
   readonly name: string;
+  readonly site?: string;
 }
 
 async function findCounterByName(name: string): Promise<MetrikaCounter | undefined> {
@@ -62,4 +66,30 @@ export async function createGoal(counterId: number, goalName: string): Promise<v
     if (error instanceof Error && /already exists|уже существ/i.test(error.message)) return;
     throw error;
   }
+}
+
+// Read-only — lists every counter the given identity's token can see
+// (conversion-audit skill, step 2). Used to find a client's counter by
+// matching site/name when the counter id isn't already known — exactly
+// how the Медавеню counter (45848736, site medavenu.by) was found
+// 2026-08-18.
+export async function listCounters(accessTokenEnv?: string): Promise<readonly MetrikaCounter[]> {
+  const data = (await callMetrika("/counters", "GET", undefined, accessTokenEnv)) as { counters?: MetrikaCounter[] };
+  return data.counters ?? [];
+}
+
+export interface MetrikaGoal {
+  readonly id: number;
+  readonly name: string;
+  readonly type: string;
+  readonly status?: string;
+}
+
+// Read-only — the "what's available" list a human picks target
+// conversions from (conversion-audit skill, step 2).
+export async function listGoals(counterId: number, accessTokenEnv?: string): Promise<readonly MetrikaGoal[]> {
+  const data = (await callMetrika(`/counter/${counterId}/goals`, "GET", undefined, accessTokenEnv)) as {
+    goals?: MetrikaGoal[];
+  };
+  return data.goals ?? [];
 }

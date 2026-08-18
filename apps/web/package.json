@@ -33,6 +33,7 @@
     "@ama/tools": "workspace:*",
     "@ama/workflow-engine": "workspace:*",
     "@anthropic-ai/sdk": "^0.116.0",
+    "@supabase/supabase-js": "^2.112.3",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
