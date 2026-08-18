@@ -43,6 +43,7 @@ export async function syncAdStats(
   let rows: ReadonlyArray<{
     campaignId: string;
     campaignName: string;
+    date: string;
     cost: number;
     impressions: number;
     clicks: number;
@@ -58,6 +59,7 @@ export async function syncAdStats(
     rows = report.map((r) => ({
       campaignId: r.campaignId,
       campaignName: r.campaignName,
+      date: r.date,
       cost: r.costMicros / 1_000_000,
       impressions: r.impressions,
       clicks: r.clicks,
@@ -72,6 +74,7 @@ export async function syncAdStats(
     rows = report.map((r) => ({
       campaignId: r.campaignId,
       campaignName: r.campaignName,
+      date: r.date,
       cost: r.cost,
       impressions: r.impressions,
       clicks: r.clicks,
@@ -79,19 +82,17 @@ export async function syncAdStats(
     }));
   }
 
-  // One row per (campaign, date) is expected from the underlying reports,
-  // but neither getCampaignReport currently segments by date within a
-  // range — each row here represents the whole [startDate, endDate]
-  // window, stored under endDate. Known limitation: syncing a multi-day
-  // range collapses it into one ad_stat row rather than one per day;
-  // day-by-day history (needed for real week-over-week comparison) means
-  // calling this once per day, not once per wide range — not solved here.
+  // One row per (campaign, date) — both getCampaignReport functions now
+  // segment by date (google-ads.ts's segments.date, yandex-direct.ts's
+  // "Date" field), so real day-by-day history lands in ad_stat instead of
+  // one collapsed row per sync call. This is what week-over-week/anomaly
+  // comparisons need.
   const upsertRows = rows.map((r) => ({
     tenant_id: tenantId,
     client_id: clientId,
     platform: access.platform,
     account_id: access.externalAccountId,
-    date: params.endDate,
+    date: r.date,
     campaign_id: r.campaignId,
     campaign_name: r.campaignName,
     impressions: r.impressions,

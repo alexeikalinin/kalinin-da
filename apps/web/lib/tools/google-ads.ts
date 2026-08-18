@@ -146,6 +146,7 @@ export async function listConversionActions(
 export interface CampaignReportRow {
   readonly campaignId: string;
   readonly campaignName: string;
+  readonly date: string; // YYYY-MM-DD
   readonly costMicros: number;
   readonly impressions: number;
   readonly clicks: number;
@@ -158,6 +159,10 @@ export interface CampaignReportRow {
 // across one row per conversion action, which silently corrupts those
 // numbers if read from the same row as the segmented conversions. Confirmed
 // by hitting exactly this while building the Медавеню report (2026-08-18).
+// Both queries are also segmented by segments.date (one row per
+// campaign+day, not one row for the whole range) — needed for real
+// day-over-day history in ad_stat (anomaly detection, week-over-week
+// comparisons), not just a single collapsed total.
 export async function getCampaignReport(
   customerId: string,
   params: { readonly startDate: string; readonly endDate: string; readonly conversionActionIds: readonly string[] },
@@ -167,18 +172,27 @@ export async function getCampaignReport(
     customerId,
     "/googleAds:search",
     {
-      query: `SELECT campaign.id, campaign.name, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
+      query: `SELECT campaign.id, campaign.name, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
               FROM campaign
               WHERE segments.date BETWEEN '${params.startDate}' AND '${params.endDate}'`,
     },
     options,
-  )) as { results?: ReadonlyArray<{ campaign: { id: string; name: string }; metrics: Record<string, number> }> };
+  )) as {
+    results?: ReadonlyArray<{
+      campaign: { id: string; name: string };
+      segments: { date: string };
+      metrics: Record<string, number>;
+    }>;
+  };
 
   const rows = new Map<string, CampaignReportRow>();
+  const keyOf = (campaignId: string, date: string) => `${campaignId}:${date}`;
   for (const r of baseData.results ?? []) {
-    rows.set(r.campaign.id, {
+    const key = keyOf(r.campaign.id, r.segments.date);
+    rows.set(key, {
       campaignId: r.campaign.id,
       campaignName: r.campaign.name,
+      date: r.segments.date,
       costMicros: Number(r.metrics.costMicros ?? 0),
       impressions: Number(r.metrics.impressions ?? 0),
       clicks: Number(r.metrics.clicks ?? 0),
@@ -192,7 +206,7 @@ export async function getCampaignReport(
       customerId,
       "/googleAds:search",
       {
-        query: `SELECT campaign.id, segments.conversion_action, metrics.all_conversions
+        query: `SELECT campaign.id, segments.date, segments.conversion_action, metrics.all_conversions
                 FROM campaign
                 WHERE segments.date BETWEEN '${params.startDate}' AND '${params.endDate}'
                 AND segments.conversion_action IN (${params.conversionActionIds
@@ -203,12 +217,12 @@ export async function getCampaignReport(
     )) as {
       results?: ReadonlyArray<{
         campaign: { id: string };
-        segments: { conversionAction: string };
+        segments: { date: string; conversionAction: string };
         metrics: { allConversions?: number };
       }>;
     };
     for (const r of convData.results ?? []) {
-      const row = rows.get(r.campaign.id);
+      const row = rows.get(keyOf(r.campaign.id, r.segments.date));
       if (!row) continue;
       const conversionActionId = r.segments.conversionAction.split("/").pop() ?? r.segments.conversionAction;
       (row.conversionsByAction as Record<string, number>)[conversionActionId] = Number(r.metrics.allConversions ?? 0);

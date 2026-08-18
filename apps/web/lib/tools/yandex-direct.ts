@@ -115,6 +115,7 @@ export async function createOrReusePausedCampaign(
 export interface DirectCampaignReportRow {
   readonly campaignId: string;
   readonly campaignName: string;
+  readonly date: string; // YYYY-MM-DD
   readonly cost: number;
   readonly impressions: number;
   readonly clicks: number;
@@ -153,7 +154,12 @@ export async function getCampaignReport(
       params: {
         SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate },
         Goals: params.goalIds,
-        FieldNames: ["CampaignId", "CampaignName", "Impressions", "Clicks", "Cost", "Conversions"],
+        // "Date" (not just DateFrom/DateTo in SelectionCriteria) is what
+        // makes the report return one row per campaign PER DAY instead of
+        // one aggregated row for the whole range — needed for real
+        // day-by-day ad_stat history, same reasoning as google-ads.ts's
+        // segments.date.
+        FieldNames: ["Date", "CampaignId", "CampaignName", "Impressions", "Clicks", "Cost", "Conversions"],
         ReportName: `ama-report-${Date.now()}`,
         ReportType: "CAMPAIGN_PERFORMANCE_REPORT",
         DateRangeType: "CUSTOM_DATE",
@@ -169,9 +175,14 @@ export async function getCampaignReport(
   }
 
   // First line is the report title ("Report <id> (<from> - <to>)"), not a
-  // TSV header — skip it before handing off to the generic parser.
+  // TSV header — skip it before handing off to the generic parser. A
+  // trailing "Total rows: N" footer line also showed up once the report
+  // was segmented by Date (not present on the earlier non-segmented
+  // report) — strip it too, or it gets misparsed as a data row with
+  // garbage column values.
   const withoutTitle = text.slice(text.indexOf("\n") + 1);
-  const rows = parseTsv(withoutTitle);
+  const withoutFooter = withoutTitle.replace(/\n?Total rows: \d+\s*$/, "");
+  const rows = parseTsv(withoutFooter);
 
   return rows.map((row) => {
     const conversionsByGoal: Record<string, number> = {};
@@ -182,6 +193,7 @@ export async function getCampaignReport(
     return {
       campaignId: row.CampaignId,
       campaignName: row.CampaignName,
+      date: row.Date,
       cost: Number(row.Cost || 0),
       impressions: Number(row.Impressions || 0),
       clicks: Number(row.Clicks || 0),
