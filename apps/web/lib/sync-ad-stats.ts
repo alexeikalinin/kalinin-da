@@ -1,7 +1,7 @@
 import { getSupabase, getSupabaseOwnerTenantId } from "./supabase.ts";
 import { resolveAccessContext } from "./tools/platform-identity.ts";
-import { getCampaignReport as getGoogleCampaignReport } from "./tools/google-ads.ts";
-import { getCampaignReport as getYandexCampaignReport } from "./tools/yandex-direct.ts";
+import { getCampaignReport as getGoogleCampaignReport, getAccountCurrency as getGoogleAccountCurrency } from "./tools/google-ads.ts";
+import { getCampaignReport as getYandexCampaignReport, getAccountCurrency as getYandexAccountCurrency } from "./tools/yandex-direct.ts";
 
 // Client ad-account reporting foundation (2026-08-18) — pulls real
 // campaign metrics for one client_ad_account over a date range and
@@ -49,13 +49,19 @@ export async function syncAdStats(
     clicks: number;
     conversions: Record<string, number>;
   }>;
+  let currency: string;
 
   if (access.platform === "google-ads") {
-    const report = await getGoogleCampaignReport(
-      access.externalAccountId,
-      { startDate: params.startDate, endDate: params.endDate, conversionActionIds: conversionIds },
-      { refreshTokenEnv: access.credentialRef, loginCustomerId: access.managerId ?? undefined },
-    );
+    const options = { refreshTokenEnv: access.credentialRef, loginCustomerId: access.managerId ?? undefined };
+    const [report, accountCurrency] = await Promise.all([
+      getGoogleCampaignReport(
+        access.externalAccountId,
+        { startDate: params.startDate, endDate: params.endDate, conversionActionIds: conversionIds },
+        options,
+      ),
+      getGoogleAccountCurrency(access.externalAccountId, options),
+    ]);
+    currency = accountCurrency;
     rows = report.map((r) => ({
       campaignId: r.campaignId,
       campaignName: r.campaignName,
@@ -66,11 +72,16 @@ export async function syncAdStats(
       conversions: r.conversionsByAction,
     }));
   } else {
-    const report = await getYandexCampaignReport(
-      access.accessMode === "agency_manager" ? access.externalAccountId : undefined,
-      { startDate: params.startDate, endDate: params.endDate, goalIds: conversionIds },
-      access.credentialRef,
-    );
+    const yandexClientLogin = access.accessMode === "agency_manager" ? access.externalAccountId : undefined;
+    const [report, accountCurrency] = await Promise.all([
+      getYandexCampaignReport(
+        yandexClientLogin,
+        { startDate: params.startDate, endDate: params.endDate, goalIds: conversionIds },
+        access.credentialRef,
+      ),
+      getYandexAccountCurrency(yandexClientLogin, access.credentialRef),
+    ]);
+    currency = accountCurrency;
     rows = report.map((r) => ({
       campaignId: r.campaignId,
       campaignName: r.campaignName,
@@ -98,7 +109,9 @@ export async function syncAdStats(
     impressions: r.impressions,
     clicks: r.clicks,
     cost: r.cost,
+    currency,
     conversions: r.conversions,
+    conversions_total: Object.values(r.conversions).reduce((sum, v) => sum + v, 0),
   }));
 
   if (upsertRows.length === 0) return { rowsWritten: 0 };

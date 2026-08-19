@@ -143,6 +143,22 @@ export async function listConversionActions(
   });
 }
 
+// Real finding (2026-08-19): a Google Ads account's cost is reported in
+// its own currency (Медавеню's: USD), separate from — and not
+// interchangeable with — a Yandex Direct account's currency (BYN). See
+// yandex-direct.ts's getAccountCurrency for the matching function there.
+export async function getAccountCurrency(customerId: string, options: GoogleAdsCallOptions = {}): Promise<string> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/googleAds:search",
+    { query: "SELECT customer.currency_code FROM customer LIMIT 1" },
+    options,
+  )) as { results?: ReadonlyArray<{ customer: { currencyCode: string } }> };
+  const currencyCode = data.results?.[0]?.customer.currencyCode;
+  if (!currencyCode) throw new Error(`Could not determine currency for customer ${customerId}`);
+  return currencyCode;
+}
+
 export interface CampaignReportRow {
   readonly campaignId: string;
   readonly campaignName: string;

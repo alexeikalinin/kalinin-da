@@ -172,14 +172,61 @@ export const AD_STAT_COLUMNS: readonly AdStatDatasetColumn[] = [
   { name: "impressions", title: "impressions", userType: "integer", nativeType: "int8", nullable: false },
   { name: "clicks", title: "clicks", userType: "integer", nativeType: "int8", nullable: false },
   { name: "cost", title: "cost", userType: "float", nativeType: "numeric", nullable: false },
+  // Real finding (2026-08-19): Google Ads (Медавеню: USD) and Yandex
+  // Direct (Медавеню: BYN) report cost in their own account currency —
+  // never sum/stack "cost" across platforms without checking this field
+  // first; split charts by platform instead.
+  { name: "currency", title: "currency", userType: "string", nativeType: "text", nullable: true },
   { name: "conversions", title: "conversions", userType: "unsupported", nativeType: "jsonb", nullable: false },
+  // Plain numeric sum of the conversions jsonb's values, computed at sync
+  // time (see sync-ad-stats.ts) — DataLens has no easy way to aggregate
+  // an arbitrary JSON object's values itself, and different clients
+  // approve different conversion sets, so this is what's actually
+  // chartable.
+  { name: "conversions_total", title: "conversions_total", userType: "float", nativeType: "numeric", nullable: false },
   { name: "synced_at", title: "synced_at", userType: "genericdatetime", nativeType: "timestamptz", nullable: false },
 ];
 
 // The result_schema fields actually useful for charts — a subset of
 // AD_STAT_COLUMNS (skips id/tenant_id/account_id/synced_at/conversions,
 // which nothing charts directly today).
-const CHARTABLE_COLUMNS = ["date", "platform", "client_id", "campaign_id", "campaign_name", "impressions", "clicks", "cost"];
+const CHARTABLE_COLUMNS = [
+  "date",
+  "platform",
+  "client_id",
+  "campaign_id",
+  "campaign_name",
+  "impressions",
+  "clicks",
+  "cost",
+  "currency",
+  "conversions_total",
+];
+
+// Calculated fields built from the raw columns above — DataLens formula
+// syntax (Tableau-like, references fields by their *title* in brackets).
+//
+// Real finding (2026-08-19): DIV_SAFE(...) as the OUTERMOST function makes
+// DataLens classify the whole field as a DIMENSION with aggregation locked
+// to "None" — even though both arguments are SUM(...). That silently
+// returns 0 for every point in any chart grouped by other dimensions
+// (confirmed via getDataset showing "aggregation_locked": true and the
+// UI's aggregation dropdown fully greyed out). Plain division classifies
+// correctly as MEASURE with "Auto" aggregation. Multiply the numerator by
+// a float literal (100.0, not 100) to force float division too — otherwise
+// int/int truncates. See reference_datalens_gotchas.md gotcha #6.
+interface CalculatedField {
+  readonly guid: string;
+  readonly title: string;
+  readonly cast: string;
+  readonly formula: string;
+}
+
+const CALCULATED_FIELDS: readonly CalculatedField[] = [
+  { guid: "f_ctr", title: "CTR, %", cast: "float", formula: "SUM([clicks]) * 100.0 / SUM([impressions])" },
+  { guid: "f_cr", title: "CR, %", cast: "float", formula: "SUM([conversions_total]) * 100.0 / SUM([clicks])" },
+  { guid: "f_cpa", title: "CPA (cost per conversion)", cast: "float", formula: "SUM([cost]) / SUM([conversions_total])" },
+];
 
 export async function createAdStatDataset(
   title: string,
@@ -208,18 +255,27 @@ export async function createAdStatDataset(
         },
       ],
       source_avatars: [{ id: "avatar_ad_stat", source_id: "src_ad_stat", title: "ad_stat", is_root: true, managed_by: "user" }],
-      result_schema: CHARTABLE_COLUMNS.map((name) => {
-        const column = AD_STAT_COLUMNS.find((c) => c.name === name);
-        if (!column) throw new Error(`Unknown ad_stat column: ${name}`);
-        return {
-          guid: `f_${column.name}`,
-          title: column.title,
-          cast: column.userType,
-          calc_mode: "direct",
-          avatar_id: "avatar_ad_stat",
-          source: column.name,
-        };
-      }),
+      result_schema: [
+        ...CHARTABLE_COLUMNS.map((name) => {
+          const column = AD_STAT_COLUMNS.find((c) => c.name === name);
+          if (!column) throw new Error(`Unknown ad_stat column: ${name}`);
+          return {
+            guid: `f_${column.name}`,
+            title: column.title,
+            cast: column.userType,
+            calc_mode: "direct",
+            avatar_id: "avatar_ad_stat",
+            source: column.name,
+          };
+        }),
+        ...CALCULATED_FIELDS.map((f) => ({
+          guid: f.guid,
+          title: f.title,
+          cast: f.cast,
+          calc_mode: "formula",
+          formula: f.formula,
+        })),
+      ],
     },
   })) as { id: string };
   return { datasetId: created.id };

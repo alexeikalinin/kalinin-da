@@ -53,6 +53,32 @@ interface DirectCampaign {
   readonly State: string;
 }
 
+// Real finding (2026-08-19, auditing the Медавеню dashboard): Yandex
+// Direct accounts report cost in their own local currency (this one:
+// BYN) while Google Ads accounts report in whatever the account was set
+// up with (Медавеню's: USD) — ad_stat rows previously had no currency
+// field at all, and a dashboard summed/stacked both platforms' "cost" as
+// if they were the same unit. clientLogin required in agency mode (same
+// as callDirect); direct/personal mode uses the plain "clients" resource
+// instead (no SelectionCriteria — it returns the authorized account's own
+// info).
+export async function getAccountCurrency(clientLogin: string | undefined, accessTokenEnv?: string): Promise<string> {
+  if (clientLogin) {
+    const result = (await callDirect(
+      "agencyclients",
+      "get",
+      { SelectionCriteria: { Logins: [clientLogin] }, FieldNames: ["Login", "Currency"] },
+      undefined,
+      accessTokenEnv,
+    )) as { Clients: ReadonlyArray<{ Currency: string }> };
+    return result.Clients[0].Currency;
+  }
+  const result = (await callDirect("clients", "get", { FieldNames: ["Currency"] }, undefined, accessTokenEnv)) as {
+    Currency: string;
+  };
+  return result.Currency;
+}
+
 export async function listCampaigns(clientLogin?: string, accessTokenEnv?: string): Promise<readonly DirectCampaign[]> {
   const result = (await callDirect(
     "campaigns",
