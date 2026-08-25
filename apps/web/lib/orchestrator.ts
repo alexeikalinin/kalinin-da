@@ -424,7 +424,7 @@ export async function runNode(
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "Frontend", responsibility: "Frontend only" },
         context: c, taskDescription: "Опубликовать материалы.", materials: {},
-        complexity: "standard", invokeTool: async () => ({ url: "https://dev-placeholder.example" }),
+        complexity: "standard", invokeTool: realToolInvoker,
       });
       return createFrontendAgent(USE_REAL_MODELS ? real.realFrontend : fakeFrontend).invoke(agentInput);
     }

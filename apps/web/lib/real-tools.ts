@@ -16,6 +16,7 @@ import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
 import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
 import { generateCreativeAssets, isCreativeGenerationConfigured } from "./tools/creative-generation.ts";
 import { getClientContext, isSupabaseConfigured } from "./tools/client-context.ts";
+import { deployArtifact, isVercelDeployConfigured } from "./tools/vercel-deploy.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -161,6 +162,20 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
       }
       try {
         return await generateCreativeAssets(briefText, channels);
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "deployment-tool": {
+      const { artifact, projectName } = args as { artifact: unknown; projectName?: string };
+      if (!isVercelDeployConfigured()) {
+        // Named as a placeholder instead of returning a plausible-looking
+        // URL: the old inline stub returned https://dev-placeholder.example,
+        // which read as a real deployment in the final report.
+        return { url: "about:blank", note: "VERCEL_DEPLOY_TOKEN not configured — nothing was published." };
+      }
+      try {
+        return await deployArtifact(artifact, projectName ?? "ama-agent-deploy");
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }
