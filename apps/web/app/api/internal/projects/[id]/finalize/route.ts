@@ -1,10 +1,24 @@
 import { NextResponse } from "next/server";
+import type { ProjectId } from "@ama/agent-framework";
 import { projectCompleted } from "@ama/events";
 import { reflect } from "@ama/agent-reflection";
 import type { ProjectOutput } from "@ama/agent-report-generator";
 import { withNodeState } from "@ama/workflow-engine";
 import { AGENT_ACTOR, OWNER_TENANT_ID, getSingletons } from "../../../../../../lib/singletons.ts";
 import { getProject } from "../../../../../../lib/project-store.ts";
+
+// Reflection §2 treats a failure as the *most* informative outcome
+// ("problem" is one of the two values recordObservation stores), but this
+// used to run only on the completed branch — the blocked/failed branch
+// returned before reaching it, so the system learned exclusively from
+// projects that went well. Shared by both terminal paths now.
+function reflectOnProject(projectId: ProjectId): void {
+  const { store, log } = getSingletons();
+  const projectEvents = log.entries
+    .map((e) => e.event)
+    .filter((e) => "projectId" in e && e.projectId === projectId);
+  reflect(store, { kind: "reflection", tenantId: OWNER_TENANT_ID }, OWNER_TENANT_ID, projectId, projectEvents);
+}
 
 // Internal-only endpoint, called from a "use step" function once the
 // executeProjectWorkflow's main loop exits (graph fully succeeded, or a
@@ -31,10 +45,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       record.graphState = withNodeState(record.graphState, taskId, outcome);
     }
     record.planStatus = outcome;
+    // No projectCompleted event here — the Project did not complete; only
+    // the learning pass is shared with the success path.
+    reflectOnProject(record.projectId);
     return NextResponse.json({ status: outcome });
   }
 
-  const { bus, store, log } = getSingletons();
+  const { bus, store } = getSingletons();
   const output = store.read(AGENT_ACTOR, {
     level: "project",
     tenantId: OWNER_TENANT_ID,
@@ -44,10 +61,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   record.planStatus = "completed";
   await bus.publish(projectCompleted({ tenantId: OWNER_TENANT_ID, projectId: record.projectId }));
 
-  const projectEvents = log.entries
-    .map((e) => e.event)
-    .filter((e) => "projectId" in e && e.projectId === record.projectId);
-  reflect(store, { kind: "reflection", tenantId: OWNER_TENANT_ID }, OWNER_TENANT_ID, record.projectId, projectEvents);
+  reflectOnProject(record.projectId);
 
   return NextResponse.json({ status: "completed" });
 }
