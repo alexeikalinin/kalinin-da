@@ -13,6 +13,7 @@ import type { FrontendModelCaller } from "@ama/agent-frontend";
 import type { AnalyticsModelCaller } from "@ama/agent-analytics";
 import type { QaModelCaller } from "@ama/agent-qa";
 import type { ReportModelCaller } from "@ama/agent-report-generator";
+import type { AgentArchitectModelCaller } from "@ama/agent-agent-architect";
 import { callClaudeForJson } from "./anthropic.ts";
 
 // Real Anthropic-backed implementations of every role's ModelCaller —
@@ -356,4 +357,72 @@ export const realReport: ReportModelCaller = async (prompt, modelId, materials) 
   });
   void materials;
   return { narrativeSummary: out.narrativeSummary, decisionSummary: out.decisionSummary };
+};
+
+// Agent Framework §4a — a service role, not a conveyor role, so it has no
+// fake* counterpart in orchestrator.ts's runNode switch: it is never a
+// graph node. Reached through its own endpoint instead
+// (app/api/agent-architect/propose), the same way Reflection is reached
+// from finalize rather than from the graph.
+export const realAgentArchitect: AgentArchitectModelCaller = async (
+  prompt,
+  modelId,
+  roleDescription,
+  existingRoleIds,
+) => {
+  const out = await callClaudeForJson<{
+    roleId: string;
+    displayName: string;
+    purpose: string;
+    responsibility: string;
+    completionCriteria: string;
+    memoryLevels: string[];
+    toolIds: string[];
+    overlapWarnings: string[];
+    decisionSummary: string;
+  }>(prompt, modelId, {
+    name: "submit_role_spec_proposal",
+    description:
+      "Propose a new agent role spec by the standard contract. Flag any overlap with existing roles rather than assuming the boundary is clean.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        roleId: { type: "string" },
+        displayName: { type: "string" },
+        purpose: { type: "string" },
+        responsibility: { type: "string" },
+        completionCriteria: { type: "string" },
+        memoryLevels: { type: "array", items: { type: "string" } },
+        toolIds: { type: "array", items: { type: "string" } },
+        overlapWarnings: { type: "array", items: { type: "string" } },
+        decisionSummary: { type: "string" },
+      },
+      required: [
+        "roleId",
+        "displayName",
+        "purpose",
+        "responsibility",
+        "completionCriteria",
+        "memoryLevels",
+        "toolIds",
+        "overlapWarnings",
+        "decisionSummary",
+      ],
+    },
+  });
+  void roleDescription;
+  void existingRoleIds;
+  return {
+    proposal: {
+      roleId: asRoleId(out.roleId),
+      displayName: out.displayName,
+      purpose: out.purpose,
+      responsibility: out.responsibility,
+      completionCriteria: out.completionCriteria,
+      memoryLevels: out.memoryLevels as never,
+      toolIds: out.toolIds,
+      overlapWarnings: out.overlapWarnings,
+    },
+    decisionSummary: out.decisionSummary,
+  };
 };

@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ama/agent-agent-architect": "workspace:*",
     "@ama/agent-analytics": "workspace:*",
     "@ama/agent-ceo": "workspace:*",
     "@ama/agent-copywriter": "workspace:*",

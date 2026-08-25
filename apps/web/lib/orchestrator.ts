@@ -83,7 +83,7 @@ const USE_REAL_MODELS = isAnthropicConfigured();
 // API/Application Layer §2 — the roles PM Agent is allowed to choose from
 // (the reference conveyor, minus the service roles CEO/PM/Agent
 // Architect/Reflection, which aren't things a Project's plan contains).
-const AVAILABLE_ROLE_IDS: readonly RoleId[] = [
+export const AVAILABLE_ROLE_IDS: readonly RoleId[] = [
   "research",
   "seo",
   "ppc",
