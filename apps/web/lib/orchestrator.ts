@@ -324,6 +324,18 @@ export async function runNode(
     return depNode ? relativeProjectMemoryKey(depNode.roleId, depTaskId) : depTaskId;
   });
 
+  // If QA rejected this Task on an earlier pass, run-node stored its issues
+  // in Project Memory. Adding the key here is what makes a revision round
+  // differ from simply running the same Task again with the same prompt.
+  const qaIssuesKey = `${node.taskId}:qa-issues`;
+  const hasQaIssues =
+    store.read(AGENT_ACTOR, {
+      level: "project",
+      tenantId: OWNER_TENANT_ID,
+      key: `${record.projectId}:${qaIssuesKey}`,
+    }) !== undefined;
+  if (hasQaIssues) projectContextKeys.push(qaIssuesKey);
+
   switch (node.roleId) {
     case "research": {
       const { agentInput } = prepareResearchInvocation({

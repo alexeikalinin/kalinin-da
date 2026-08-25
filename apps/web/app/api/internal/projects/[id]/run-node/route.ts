@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { asRoleId, asTaskId, type AgentError } from "@ama/agent-framework";
+import type { QaVerdict } from "@ama/agent-qa";
 import { withNodeState } from "@ama/workflow-engine";
 import { taskFailed, taskStarted, taskSucceeded } from "@ama/events";
 import { AGENT_ACTOR, OWNER_TENANT_ID, getSingletons } from "../../../../../../lib/singletons.ts";
@@ -37,6 +38,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       store.archiveTaskIntoProject(AGENT_ACTOR, node.taskId, record.projectId);
     }
     await bus.publish(taskSucceeded(taskRef, output.decisions));
+
+    // QA §: the review itself succeeding and the artifact passing are two
+    // different things. A rejecting verdict used to end here as a plain
+    // "success" and the graph moved on to Report Generator regardless —
+    // QA's own README flagged this. Now a rejection is reported upward so
+    // executeProjectWorkflow can send the reviewed Task back for revision.
+    if (node.roleId === "qa") {
+      const verdict = output.result as QaVerdict | undefined;
+      const reviewedTaskId = node.dependsOn[0];
+      if (verdict?.approved === false && reviewedTaskId) {
+        // Stored as text, not the raw array: assemblePrompt's readStrings
+        // only surfaces string-valued Project Memory entries, so an array
+        // here would silently never reach the reviewed role's prompt.
+        store.write(
+          AGENT_ACTOR,
+          { level: "project", tenantId: OWNER_TENANT_ID, key: `${record.projectId}:${reviewedTaskId}:qa-issues` },
+          `QA вернул задачу на доработку. Замечания:\n${verdict.issues.map((i) => `- ${i}`).join("\n")}`,
+        );
+        return NextResponse.json({ status: "needs_revision", reviewedTaskId, issues: verdict.issues });
+      }
+    }
+
     return NextResponse.json({ status: "success" });
   }
 
