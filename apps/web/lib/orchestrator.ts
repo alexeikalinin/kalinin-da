@@ -393,7 +393,8 @@ export async function runNode(
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "UI", responsibility: "UI only" },
         context: c, taskDescription: "Создать макеты.", clientFactKeys: [], projectContextKeys,
-        complexity: "standard", invokeTool: async () => ({}),
+        complexity: "standard", invokeTool: realToolInvoker,
+        projectTitle: `AMA — ${record.projectId}`,
       });
       return createUiDesignerAgent(USE_REAL_MODELS ? real.realUiDesigner : fakeUiDesigner).invoke(agentInput);
     }

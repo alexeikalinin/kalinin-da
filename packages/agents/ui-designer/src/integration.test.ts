@@ -103,3 +103,77 @@ test("UI Designer runs after UX and reads its plan from Project Memory", async (
     assert.match(uiOutput.result.designNotes, /3-step funnel/);
   }
 });
+
+// Regression: the dispatcher used to build a payload with no brief at all
+// and the agent invoked the design tool with `{}`, so a real design backend
+// received nothing describing what to draw — the mockup could not reflect
+// the Task even in principle. Locks in that the task description and UX's
+// plan both reach the tool.
+test("the design tool receives a brief built from the task and the UX plan", async () => {
+  const store = new MemoryStore();
+  const registry = new ToolRegistry();
+  const credentials = new CredentialStore();
+  const catalog = createAnthropicModelCatalog();
+  const tenantId = asTenantId("tenant-a");
+  const projectId = asProjectId("project-brief");
+  const approver = { kind: "approver" as const, tenantId };
+
+  registry.register(approver, { toolId: "design-tool", displayName: "Design Tool" });
+  credentials.issue(approver, "design-tool", "token-design");
+
+  // UX's plan is a plain string here: assemblePrompt only surfaces
+  // string-valued Project Memory entries, so a structured object would not
+  // reach the prompt (and therefore not the brief) at all.
+  store.write(
+    { kind: "agent", tenantId },
+    { level: "project", tenantId, key: `${projectId}:ux-plan` },
+    "Воронка: главная -> каталог -> карточка -> оформление заказа.",
+  );
+
+  const context = createInvocationContext({
+    tenantId,
+    projectId,
+    taskId: asTaskId("ui-task"),
+    roleId: asRoleId("ui-designer"),
+    executionTier: "standard",
+    approvalLevel: "output-only",
+  });
+
+  let receivedArgs: Record<string, unknown> | undefined;
+  const { agentInput } = prepareUiDesignerInvocation({
+    store,
+    registry,
+    credentials,
+    catalog,
+    template: {
+      roleId: asRoleId("ui-designer"),
+      version: 1,
+      purpose: "UI Designer",
+      responsibility: "UI Designer only",
+    },
+    context,
+    taskDescription: "Сделать лендинг для клиники.",
+    clientFactKeys: [],
+    projectContextKeys: ["ux-plan"],
+    complexity: "standard",
+    deviceType: "DESKTOP",
+    projectTitle: "AMA — project-brief",
+    invokeTool: async (_toolId, args) => {
+      receivedArgs = args as Record<string, unknown>;
+      return { screenshotUrl: "https://example.test/s.png", html: "<html></html>" };
+    },
+  });
+
+  const output = await createUiDesignerAgent(async () => ({
+    design: { mockupRefs: ["mockup-1"], designNotes: "ok" },
+    decisionSummary: "ok",
+  })).invoke(agentInput);
+
+  assert.equal(output.status, "success");
+  const brief = String(receivedArgs?.brief ?? "");
+  assert.ok(brief.length > 0, "design tool must receive a non-empty brief");
+  assert.match(brief, /лендинг для клиники/);
+  assert.match(brief, /каталог -> карточка/);
+  assert.equal(receivedArgs?.deviceType, "DESKTOP");
+  assert.equal(receivedArgs?.projectTitle, "AMA — project-brief");
+});
