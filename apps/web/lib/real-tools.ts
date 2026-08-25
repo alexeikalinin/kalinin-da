@@ -14,6 +14,8 @@ import { createOrReusePausedCampaign as createOrReuseMetaCampaign, isMetaAdsConf
 import { createOrReusePausedCampaign as createOrReuseVkCampaign, isVkAdsConfigured } from "./tools/vk-ads.ts";
 import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
 import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
+import { generateCreativeAssets, isCreativeGenerationConfigured } from "./tools/creative-generation.ts";
+import { getClientContext, isSupabaseConfigured } from "./tools/client-context.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -138,6 +140,27 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
           workbookId: workbook.workbookId,
           note: "Workbook provisioned — datasets/charts/dashboards are not built yet, this is the container only.",
         };
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "client-context": {
+      const { clientId } = args as { clientId: string };
+      if (!isSupabaseConfigured()) return { note: "Supabase not configured — no approved target conversions or synced ad_stat available." };
+      try {
+        return await getClientContext(clientId);
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "creative-generation": {
+      const { briefText, channels } = args as { briefText: string; channels: readonly string[] };
+      if (!isCreativeGenerationConfigured()) {
+        // graceful degrade, no OPENAI_API_KEY configured
+        return { assetRefs: channels.map((c) => `placeholder-asset-${c}`), note: "OPENAI_API_KEY not configured" };
+      }
+      try {
+        return await generateCreativeAssets(briefText, channels);
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }

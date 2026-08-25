@@ -55,6 +55,8 @@ function createSingletons(): Singletons {
     "datalens",
     "design-tool",
     "deployment-tool",
+    "creative-generation",
+    "client-context",
   ];
   for (const toolId of toolIds) {
     registry.register(APPROVER, { toolId, displayName: toolId });

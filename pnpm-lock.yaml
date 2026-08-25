@@ -23,6 +23,9 @@ importers:
       '@ama/agent-copywriter':
         specifier: workspace:*
         version: link:../../packages/agents/copywriter
+      '@ama/agent-creative':
+        specifier: workspace:*
+        version: link:../../packages/agents/creative
       '@ama/agent-framework':
         specifier: workspace:*
         version: link:../../packages/agent-framework
@@ -229,6 +232,40 @@ importers:
         specifier: workspace:*
         version: link:../../workflow-engine
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
+  packages/agents/creative:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/knowledge-base':
+        specifier: workspace:*
+        version: link:../../knowledge-base
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@ama/agent-copywriter':
+        specifier: workspace:*
+        version: link:../copywriter
+      '@ama/agent-media-buyer':
+        specifier: workspace:*
+        version: link:../media-buyer
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1

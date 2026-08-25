@@ -13,6 +13,7 @@
     "@ama/agent-analytics": "workspace:*",
     "@ama/agent-ceo": "workspace:*",
     "@ama/agent-copywriter": "workspace:*",
+    "@ama/agent-creative": "workspace:*",
     "@ama/agent-framework": "workspace:*",
     "@ama/agent-frontend": "workspace:*",
     "@ama/agent-media-buyer": "workspace:*",

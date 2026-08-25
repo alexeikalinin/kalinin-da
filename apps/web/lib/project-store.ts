@@ -31,6 +31,11 @@ export interface ProjectInput {
   readonly gaAccountId?: string;
   readonly yandexClientLogin?: string;
   readonly metaAdAccountId?: string;
+  // client_ad_account reporting foundation's client.id — when supplied,
+  // the Analytics Agent also reads approved target_conversion + synced
+  // ad_stat via the "client-context" tool (agent-framework maturity
+  // audit, 2026-08-21).
+  readonly clientId?: string;
 }
 
 export interface ProjectRecord {
@@ -77,6 +82,7 @@ export const ROLE_OUTPUT: Record<string, { level: "task" | "project"; key: strin
   seo: { level: "task", key: "seo-recommendations" },
   ppc: { level: "task", key: "campaign-summary" },
   "media-buyer": { level: "project", key: "media-budget-plan" },
+  creative: { level: "task", key: "creative-assets" },
   ux: { level: "project", key: "ux-plan" },
   "ui-designer": { level: "task", key: "ui-design" },
   copywriter: { level: "task", key: "copy-draft" },

@@ -37,6 +37,11 @@ import {
   prepareCopywriterInvocation,
   type CopywriterModelCaller,
 } from "@ama/agent-copywriter";
+import {
+  createCreativeAgent,
+  prepareCreativeInvocation,
+  type CreativeModelCaller,
+} from "@ama/agent-creative";
 import { createFrontendAgent, prepareFrontendInvocation, type FrontendModelCaller } from "@ama/agent-frontend";
 import { createAnalyticsAgent, prepareAnalyticsInvocation, type AnalyticsModelCaller } from "@ama/agent-analytics";
 import { createQaAgent, prepareQaInvocation, type QaModelCaller } from "@ama/agent-qa";
@@ -86,6 +91,7 @@ const AVAILABLE_ROLE_IDS: readonly RoleId[] = [
   "ux",
   "ui-designer",
   "copywriter",
+  "creative",
   "frontend",
   "analytics",
   "qa",
@@ -127,8 +133,14 @@ function fakePm(input: ProjectInput): PmModelCaller {
       ? {
           selections: [
             { taskId: "research-task", roleId: asRoleId("research"), dependsOn: [] },
-            { taskId: "ppc-task", roleId: asRoleId("ppc"), dependsOn: ["research-task"] },
+            { taskId: "copy-task", roleId: asRoleId("copywriter"), dependsOn: ["research-task"] },
             { taskId: "media-buyer-task", roleId: asRoleId("media-buyer"), dependsOn: ["research-task"] },
+            {
+              taskId: "creative-task",
+              roleId: asRoleId("creative"),
+              dependsOn: ["copy-task", "media-buyer-task"],
+            },
+            { taskId: "ppc-task", roleId: asRoleId("ppc"), dependsOn: ["creative-task", "media-buyer-task"] },
             {
               taskId: "analytics-task",
               roleId: asRoleId("analytics"),
@@ -137,7 +149,8 @@ function fakePm(input: ProjectInput): PmModelCaller {
             { taskId: "qa-task", roleId: asRoleId("qa"), dependsOn: ["analytics-task"] },
             { taskId: "report-task", roleId: asRoleId("report-generator"), dependsOn: ["qa-task"] },
           ],
-          decisionSummary: "Задача про рекламу — Research → PPC/Media Buyer → Analytics → QA → Report.",
+          decisionSummary:
+            "Задача про рекламу — Research → Copywriter/Media Buyer → Creative → PPC → Analytics → QA → Report.",
         }
       : {
           selections: [
@@ -180,6 +193,16 @@ function fakeCopywriter(input: ProjectInput): CopywriterModelCaller {
     decisionSummary: "Тексты написаны.",
   });
 }
+const fakeCreative: CreativeModelCaller = async (_p, _m, toolOutput) => ({
+  assets: {
+    assetRefs:
+      toolOutput && typeof toolOutput === "object" && Array.isArray((toolOutput as { assetRefs?: unknown }).assetRefs)
+        ? (toolOutput as { assetRefs: string[] }).assetRefs
+        : ["placeholder-asset"],
+    notes: "Креатив соответствует утверждённому тексту и медиаплану.",
+  },
+  decisionSummary: "Баннер сгенерирован под запрошенные каналы.",
+});
 const fakeFrontend: FrontendModelCaller = async (_p, _m, materials) => ({
   buildArtifact: { html: `<div>${Object.keys(materials).length} sections</div>` },
   decisionSummary: "Материалы собраны в статическую страницу.",
@@ -326,7 +349,7 @@ export async function runNode(
       const { agentInput } = preparePpcInvocation({
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "PPC", responsibility: "PPC only" },
-        context: c, taskDescription: "Настроить рекламные кампании.", clientFactKeys: [],
+        context: c, taskDescription: "Настроить рекламные кампании.", clientFactKeys: [], projectContextKeys,
         channels: ["google-ads", "vk-ads", "yandex-direct", "meta-ads"], complexity: "standard", invokeTool: realToolInvoker,
         googleAdsCustomerId: record.input.googleAdsCustomerId,
         yandexClientLogin: record.input.yandexClientLogin,
@@ -373,6 +396,17 @@ export async function runNode(
         agentInput,
       );
     }
+    case "creative": {
+      const { agentInput } = prepareCreativeInvocation({
+        store, registry, credentials, catalog,
+        template: { roleId: c.roleId, version: 1, purpose: "Creative", responsibility: "Creative only" },
+        context: c, taskDescription: "Создать визуальные креативы под утверждённый текст и медиаплан.",
+        clientFactKeys: [], projectContextKeys,
+        channels: ["google-ads", "vk-ads", "yandex-direct", "meta-ads"],
+        complexity: "standard", invokeTool: realToolInvoker,
+      });
+      return createCreativeAgent(USE_REAL_MODELS ? real.realCreative : fakeCreative).invoke(agentInput);
+    }
     case "frontend": {
       const { agentInput } = prepareFrontendInvocation({
         store, registry, credentials, catalog,
@@ -391,6 +425,7 @@ export async function runNode(
         projectDisplayName: `AMA — ${record.projectId}`, siteUrl: record.input.siteUrl,
         gtmAccountId: record.input.gtmAccountId, gaAccountId: record.input.gaAccountId,
         googleAdsCustomerId: record.input.googleAdsCustomerId,
+        clientId: record.input.clientId,
       });
       return createAnalyticsAgent(USE_REAL_MODELS ? real.realAnalytics : fakeAnalytics).invoke(agentInput);
     }

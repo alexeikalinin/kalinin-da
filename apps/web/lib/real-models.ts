@@ -5,6 +5,7 @@ import type { ResearchModelCaller } from "@ama/agent-research";
 import type { SeoModelCaller } from "@ama/agent-seo";
 import type { PpcModelCaller } from "@ama/agent-ppc";
 import type { MediaBuyerModelCaller } from "@ama/agent-media-buyer";
+import type { CreativeModelCaller } from "@ama/agent-creative";
 import type { UxModelCaller } from "@ama/agent-ux";
 import type { UiDesignerModelCaller } from "@ama/agent-ui-designer";
 import type { CopywriterModelCaller } from "@ama/agent-copywriter";
@@ -182,6 +183,33 @@ export const realMediaBuyer: MediaBuyerModelCaller = async (prompt, modelId) => 
   };
 };
 
+export const realCreative: CreativeModelCaller = async (prompt, modelId, toolOutput) => {
+  const out = await callClaudeForJson<{ notes: string; decisionSummary: string }>(prompt, modelId, {
+    name: "submit_creative_notes",
+    description: "Submit the rationale for the generated ad creative assets.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        notes: { type: "string" },
+        decisionSummary: { type: "string" },
+      },
+      required: ["notes", "decisionSummary"],
+    },
+  });
+  // assetRefs come from the real creative-generation tool call, not the
+  // model — the model explains/refines the result (Agent Framework §3's
+  // "tool before model" pattern), it does not invent the refs itself, since
+  // that would silently discard the real generation call's actual output.
+  const toolAssetRefs =
+    toolOutput && typeof toolOutput === "object" && Array.isArray((toolOutput as { assetRefs?: unknown }).assetRefs)
+      ? ((toolOutput as { assetRefs: string[] }).assetRefs)
+      : [];
+  return {
+    assets: { assetRefs: toolAssetRefs, notes: out.notes },
+    decisionSummary: out.decisionSummary,
+  };
+};
+
 export const realUx: UxModelCaller = async (prompt, modelId) => {
   const out = await callClaudeForJson<{ userFlows: string[]; structureNotes: string; decisionSummary: string }>(
     prompt,
@@ -260,8 +288,21 @@ export const realFrontend: FrontendModelCaller = async (prompt, modelId, materia
 };
 
 export const realAnalytics: AnalyticsModelCaller = async (prompt, modelId, rawMetrics) => {
+  // Was previously `void rawMetrics` — every real GA/Metrika/DataLens (and
+  // now client-context) tool call was fetched and then silently discarded,
+  // never reaching the model. Fold it into clientFacts the same way
+  // realResearch does with siteContent/searchResults, so the model can
+  // actually check approved target_conversion / synced ad_stat against
+  // what GA/Metrika/DataLens report, not just narrate from the task prompt.
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [
+      ...prompt.clientFacts,
+      `Сырые данные из аналитических инструментов и client-context (реальный вызов API):\n${JSON.stringify(rawMetrics, null, 2)}`,
+    ],
+  };
   const out = await callClaudeForJson<{ summary: string; metrics: Record<string, number>; decisionSummary: string }>(
-    prompt,
+    groundedPrompt,
     modelId,
     {
       name: "submit_report",
@@ -277,7 +318,6 @@ export const realAnalytics: AnalyticsModelCaller = async (prompt, modelId, rawMe
       },
     },
   );
-  void rawMetrics;
   return { report: { summary: out.summary, metrics: out.metrics }, decisionSummary: out.decisionSummary };
 };
 
