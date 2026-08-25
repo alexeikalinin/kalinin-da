@@ -23,6 +23,14 @@ export interface AnalyticsTaskPayload {
   readonly gtmAccountId?: string;
   readonly gaAccountId?: string;
   readonly googleAdsCustomerId?: string;
+  // Client ad-account reporting foundation's client.id — when supplied,
+  // the handler also reads approved target_conversion rows and synced
+  // ad_stat via the "client-context" tool, so the report can be checked
+  // against what's actually approved/synced instead of only the raw
+  // GA/Metrika/DataLens read (see agent-framework maturity audit,
+  // 2026-08-21: these two Supabase-backed systems were previously wired
+  // independently).
+  readonly clientId?: string;
 }
 
 export type AnalyticsModelCaller = (
@@ -38,7 +46,7 @@ export function createAnalyticsAgent(callModel: AnalyticsModelCaller) {
     purpose: "Оценить эффективность запущенных кампаний по данным аналитики клиента.",
     responsibility: "Только анализ и отчётность по уже запущенным кампаниям, не их настройка.",
     completionCriteria: "Отчёт проходит проверку QA Agent.",
-    memoryLevels: ["task", "project", "client_kb"],
+    memoryLevels: ["task", "project", "client_kb", "domain_kb"],
     toolIds: ["google-analytics", "yandex-metrika", "datalens"],
 
     async handler(input: AgentInput<AnalyticsTaskPayload>): Promise<AgentOutput<AnalyticsReport>> {
@@ -51,6 +59,11 @@ export function createAnalyticsAgent(callModel: AnalyticsModelCaller) {
             gtmAccountId: input.task.payload.gtmAccountId,
             gaAccountId: input.task.payload.gaAccountId,
             googleAdsCustomerId: input.task.payload.googleAdsCustomerId,
+          });
+        }
+        if (input.task.payload.clientId) {
+          rawMetrics["client-context"] = await input.tools.invoke("client-context", {
+            clientId: input.task.payload.clientId,
           });
         }
       } catch (error) {

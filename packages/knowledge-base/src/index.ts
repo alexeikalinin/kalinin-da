@@ -4,3 +4,4 @@
 export * from "./resolve.ts";
 export * from "./direct.ts";
 export * from "./review.ts";
+export * from "./domain/yandex-direct-reach-campaigns.ts";

@@ -11,3 +11,4 @@ supabase/.temp/
 apps/web/secrets/
 *.pem
 .workflow-data/
+.vercel/

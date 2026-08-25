@@ -10,4 +10,6 @@ Builds on `@ama/memory`'s propose→confirm mechanism for the `domain_kb`/`clien
 
 Required a small, explicitly-justified extension to `@ama/memory`: an `Actor` kind `"system"` (auto-confirmation, distinct from a human `"approver"` for audit purposes) and `readRecord` (returns the full record, not just the value, so a conflict report can show *when* the existing fact was confirmed).
 
-Not yet implemented: the significance classifier itself (Open Question #1), initial Domain KB population (Open Question #2).
+- `domain/yandex-direct-reach-campaigns.ts` — `seedYandexDirectReachCampaignFacts`: initial Domain KB population (Open Question #2), for one channel. 14 facts covering охватные/медийные кампании Яндекс.Директа (Баннеры, Видеобаннеры, Видео, Непропускаемое видео, Прайм-баннер, Connected TV, Баннер под поисковой строкой, форматы по fixCPM, Пост в мессенджерах, Наружная реклама) plus overview/metrics/strategy facts and a format-selection guide. `YANDEX_DIRECT_REACH_CAMPAIGN_FACT_KEYS` (full set, for PPC Agent) and `YANDEX_DIRECT_REACH_CAMPAIGN_ANALYTICS_FACT_KEYS` (the overview/metrics/strategy subset, for Analytics Agent) are the keys a caller passes as `domainFactKeys` into `preparePpcInvocation` / `prepareAnalyticsInvocation` — dispatch itself stays a thin wrapper and doesn't guess which facts a task needs.
+
+Not yet implemented: the significance classifier itself (Open Question #1); Domain KB population for any other channel (Google Ads formats, Meta Ads formats, etc. — Yandex Direct reach campaigns is the first slice, not the whole domain).

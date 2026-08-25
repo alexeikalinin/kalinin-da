@@ -6,7 +6,7 @@ import type { ModelCatalog, TaskComplexity } from "@ama/cost-router";
 import { prepareAgentInvocation } from "@ama/workflow-engine";
 import type { PpcTaskPayload } from "./ppc-agent.ts";
 
-const MEMORY_LEVELS = ["task", "project", "client_kb"] as const;
+const MEMORY_LEVELS = ["task", "project", "client_kb", "domain_kb"] as const;
 
 export interface PreparePpcInvocationInput {
   readonly store: MemoryStore;
@@ -17,6 +17,21 @@ export interface PreparePpcInvocationInput {
   readonly context: Readonly<InvocationContext>;
   readonly taskDescription: string;
   readonly clientFactKeys: readonly string[];
+  // Domain KB keys to pull into the prompt (Prompt Architecture §1's
+  // "Экспертные знания" block) — e.g. @ama/knowledge-base's
+  // YANDEX_DIRECT_REACH_CAMPAIGN_FACT_KEYS when the task involves a
+  // yandex-direct reach/media campaign. Not defaulted here: which facts
+  // are relevant depends on the task (search vs. reach campaign), and
+  // that judgment belongs to whoever assembles the task (PM Agent /
+  // Workflow Engine), not to this thin dispatch wrapper.
+  readonly domainFactKeys?: readonly string[];
+  // Project Memory keys of Tasks this one depends on, e.g. Creative
+  // Agent's `<taskId>:creative-assets` — same mechanism and same caveat as
+  // @ama/agent-ui-designer's projectContextKeys (assemblePrompt only
+  // surfaces string-valued entries, so a structured object here doesn't
+  // yet appear as prompt text). Optional and defaulted to `[]` so every
+  // existing caller keeps working unchanged.
+  readonly projectContextKeys?: readonly string[];
   readonly channels: readonly string[];
   readonly complexity: TaskComplexity;
   readonly invokeTool: ToolInvoker;
@@ -38,6 +53,8 @@ export function preparePpcInvocation(input: PreparePpcInvocationInput) {
     context: input.context,
     taskDescription: input.taskDescription,
     clientFactKeys: input.clientFactKeys,
+    domainFactKeys: input.domainFactKeys ?? [],
+    projectContextKeys: input.projectContextKeys ?? [],
     memoryLevels: [...MEMORY_LEVELS],
     toolIds: input.channels,
     complexity: input.complexity,

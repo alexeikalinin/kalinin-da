@@ -37,7 +37,7 @@ export function createPpcAgent(callModel: PpcModelCaller) {
     responsibility:
       "Только настройка кампаний, не медиапланирование бюджета (Media Buyer Agent) и не тексты объявлений (Copywriter Agent).",
     completionCriteria: "Результат проходит проверку QA Agent по чек-листу качества PPC-раздела.",
-    memoryLevels: ["task", "project", "client_kb"],
+    memoryLevels: ["task", "project", "client_kb", "domain_kb"],
     toolIds: ["google-ads", "vk-ads", "yandex-direct", "meta-ads"],
 
     async handler(input: AgentInput<PpcTaskPayload>): Promise<AgentOutput<PpcResult>> {
