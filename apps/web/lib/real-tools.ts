@@ -17,7 +17,7 @@ import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
 import { generateCreativeAssets, isCreativeGenerationConfigured } from "./tools/creative-generation.ts";
 import { getClientContext, isSupabaseConfigured } from "./tools/client-context.ts";
 import { deployArtifact, isVercelDeployConfigured } from "./tools/vercel-deploy.ts";
-import { generateDesign, isStitchConfigured } from "./tools/stitch-design.ts";
+import { generateDesign, isV0Configured } from "./tools/v0-design.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -168,17 +168,16 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
       }
     }
     case "design-tool": {
-      const { brief, projectTitle, deviceType, brand } = args as {
+      const { brief, projectTitle, brand } = args as {
         brief?: string;
         projectTitle?: string;
-        deviceType?: "DESKTOP" | "MOBILE" | "TABLET" | "AGNOSTIC";
         brand?: Parameters<typeof generateDesign>[0]["brand"];
       };
-      if (!isStitchConfigured()) {
-        return { note: "STITCH_API_KEY not configured — no mockup was generated." };
+      if (!isV0Configured()) {
+        return { note: "V0_API_KEY not configured — no mockup was generated." };
       }
       // A brief is the whole input to this tool. Generating from an empty
-      // string would burn a Stitch generation on a screen nobody asked for,
+      // string would burn a real generation on a screen nobody asked for,
       // so this is a caller bug, reported as one.
       if (!brief?.trim()) {
         throw new ToolUnavailableError("design-tool called without a brief — nothing to design.");
@@ -186,7 +185,6 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
       try {
         return await generateDesign({
           brief,
-          deviceType,
           brand,
           projectTitle: projectTitle ?? "AMA design",
         });
