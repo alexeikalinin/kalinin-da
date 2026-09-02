@@ -11,7 +11,7 @@ import { MemoryStore, type Actor } from "@ama/memory";
 import { recordFactDirectly, YANDEX_DIRECT_REACH_CAMPAIGN_FACT_KEYS, seedYandexDirectReachCampaignFacts } from "@ama/knowledge-base";
 import { ToolRegistry, CredentialStore } from "@ama/tools";
 import { createAnthropicModelCatalog } from "@ama/cost-router";
-import { createPpcAgent, type PpcModelCaller } from "./ppc-agent.ts";
+import { createPpcAgent, type PpcSetupModelCaller } from "./ppc-agent.ts";
 import { preparePpcInvocation } from "./dispatch.ts";
 
 function approver(): Actor {
@@ -61,7 +61,7 @@ test("PPC Agent, assembled from memory + tools + prompt architecture + cost rout
   // facts and reacts to them, proving the fact recorded above actually
   // reaches this point through Prompt Architecture's assembly, not just
   // sitting unused in the store.
-  const callModel: PpcModelCaller = async (prompt) => {
+  const callModel: PpcSetupModelCaller = async (prompt) => {
     const vkHadTrouble = prompt.clientFacts.some((fact) => fact.includes("unsuccessful"));
     const budgetSplit = vkHadTrouble
       ? { "google-ads": 0.8, "vk-ads": 0.2 }
@@ -103,7 +103,7 @@ test("PPC Agent, assembled from memory + tools + prompt architecture + cost rout
   assert.equal(output.status, "success");
   if (output.status === "success") {
     assert.match(output.decisions[0]?.summary ?? "", /80\/20/);
-    assert.equal(output.result.budgetSplit["google-ads"], 0.8);
+    assert.equal((output.result as { budgetSplit: Record<string, number> }).budgetSplit["google-ads"], 0.8);
   }
 
   assert.deepEqual(
@@ -161,7 +161,7 @@ test("PPC Agent picks a reach-campaign format using seeded Domain KB facts", asy
   // Reacts to the domain fact about unskippable video the same way the
   // client_kb test reacts to a client fact — proving it arrived through
   // assembly, not that the model "already knew" it.
-  const callModel: PpcModelCaller = async (prompt) => {
+  const callModel: PpcSetupModelCaller = async (prompt) => {
     const wantsGuaranteedFullView = prompt.domainKnowledge.some((fact) =>
       fact.includes("гарантированный полный контакт"),
     );

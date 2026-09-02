@@ -10,7 +10,7 @@ import {
 import { MemoryStore } from "@ama/memory";
 import { ToolRegistry, CredentialStore } from "@ama/tools";
 import { createAnthropicModelCatalog } from "@ama/cost-router";
-import { createPpcAgent, preparePpcInvocation, type PpcModelCaller } from "@ama/agent-ppc";
+import { createPpcAgent, preparePpcInvocation, type PpcSetupModelCaller } from "@ama/agent-ppc";
 import { createReportGeneratorAgent, type ReportModelCaller } from "./report-generator-agent.ts";
 import { prepareReportGeneratorInvocation } from "./dispatch.ts";
 
@@ -39,7 +39,7 @@ test("Report Generator assembles a real PPC decision into the final Project Outp
     executionTier: "standard",
     approvalLevel: "output-only",
   });
-  const ppcCallModel: PpcModelCaller = async () => ({
+  const ppcCallModel: PpcSetupModelCaller = async () => ({
     result: { budgetSplit: { "google-ads": 0.6, "vk-ads": 0.4 } },
     decisionSummary: "60/40 Google/VK.",
   });

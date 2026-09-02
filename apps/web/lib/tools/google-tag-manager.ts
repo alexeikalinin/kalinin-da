@@ -23,14 +23,16 @@ export function isGoogleTagManagerConfigured(): boolean {
 // refreshTokenEnv — which identity's token to use (client ad-account
 // reporting foundation, 2026-08-18); defaults to the original
 // single-tenant GOOGLE_ADS_REFRESH_TOKEN via google-oauth.ts.
-async function callGtm(path: string, method: "GET" | "POST", body?: unknown, refreshTokenEnv?: string): Promise<unknown> {
+async function callGtm(path: string, method: "GET" | "POST" | "DELETE", body?: unknown, refreshTokenEnv?: string): Promise<unknown> {
   const accessToken = await getGoogleAccessToken(refreshTokenEnv);
   const response = await fetch(`${API_BASE}${path}`, {
     method,
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json();
+  // DELETE responses are empty (204/200 with no body) — nothing to parse.
+  const raw = await response.text();
+  const data = raw ? JSON.parse(raw) : undefined;
   if (!response.ok) {
     throw new Error(`Google Tag Manager API call failed: ${response.status} ${JSON.stringify(data)}`);
   }
@@ -71,9 +73,11 @@ export async function provisionContainerWithGa4Tag(
   const accountId = resolveGtmAccountId(gtmAccountId);
   const existing = await findContainerByName(projectDisplayName, accountId);
   if (existing) {
+    console.log(`[gtm] REUSED existing container "${projectDisplayName}" (${existing.publicId}) in account ${accountId} — nothing created.`);
     return { containerPath: existing.path, publicId: existing.publicId, reused: true };
   }
 
+  console.log(`[gtm] CREATING new container "${projectDisplayName}" in account ${accountId} — the GTM API cannot delete containers with the currently granted scope, so this cannot be undone automatically; clean up manually or via apps/web/scripts/delete-gtm-container.ts if this was a test run.`);
   const container = (await callGtm(`/accounts/${accountId}/containers`, "POST", {
     name: projectDisplayName,
     usageContext: ["web"],
@@ -96,6 +100,7 @@ export async function provisionContainerWithGa4Tag(
   })) as { containerVersion: { path: string } };
   await callGtm(`/${version.containerVersion.path}:publish`, "POST", {});
 
+  console.log(`[gtm] CREATED and published container "${projectDisplayName}" (${container.publicId}) in account ${accountId}.`);
   return { containerPath: container.path, publicId: container.publicId, reused: false };
 }
 
@@ -124,6 +129,18 @@ export async function findContainerByPublicId(
     if (match) return { accountId: account.accountId, containerId: match.containerId };
   }
   return undefined;
+}
+
+// Requires the tagmanager.delete.containers scope on the refresh token —
+// not covered by tagmanager.edit.containers/publish (see api-application-
+// layer.md's 2026-08-14 entry: the original test-run identity had to be
+// re-issued with this scope added before deletion was possible).
+export async function deleteContainer(
+  accountId: string,
+  containerId: string,
+  refreshTokenEnv?: string,
+): Promise<void> {
+  await callGtm(`/accounts/${accountId}/containers/${containerId}`, "DELETE", undefined, refreshTokenEnv);
 }
 
 export interface GtmTag {

@@ -3,7 +3,7 @@ import type { CeoModelCaller } from "@ama/agent-ceo";
 import type { PmModelCaller, RoleSelection } from "@ama/agent-pm";
 import type { ResearchModelCaller } from "@ama/agent-research";
 import type { SeoModelCaller } from "@ama/agent-seo";
-import type { PpcModelCaller } from "@ama/agent-ppc";
+import type { PpcSetupModelCaller, PpcRecommendModelCaller } from "@ama/agent-ppc";
 import type { MediaBuyerModelCaller } from "@ama/agent-media-buyer";
 import type { CreativeModelCaller } from "@ama/agent-creative";
 import type { UxModelCaller } from "@ama/agent-ux";
@@ -27,8 +27,25 @@ const CHANNEL_SPLIT_SCHEMA = {
 };
 
 export const realCeo: CeoModelCaller = async (prompt, modelId, input) => {
+  // Was `void input` — the comment claimed this was "already embedded in
+  // the assembled prompt's task description", which is false: CEO's own
+  // dispatch.ts (@ama/agent-ceo) hardcodes clientFactKeys to [], and the
+  // taskDescription callers pass is a fixed generic string ("Определить
+  // стратегию для Project."), never siteUrl/businessDescription/product/
+  // marketingTask. Without this, the model had no way to see what the
+  // actual client or task was — see 2026-08-27 belseltur.com pilot run.
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [
+      ...prompt.clientFacts,
+      `Сайт клиента: ${input.siteUrl}`,
+      `Описание бизнеса: ${input.businessDescription}`,
+      `Продукт/услуга: ${input.product}`,
+      `Маркетинговая задача: ${input.marketingTask}`,
+    ],
+  };
   const out = await callClaudeForJson<{ strategySummary: string; priorityGoals: string[]; decisionSummary: string }>(
-    prompt,
+    groundedPrompt,
     modelId,
     {
       name: "submit_strategy",
@@ -44,7 +61,6 @@ export const realCeo: CeoModelCaller = async (prompt, modelId, input) => {
       },
     },
   );
-  void input; // already embedded in the assembled prompt's task description
   return {
     strategy: { strategySummary: out.strategySummary, priorityGoals: out.priorityGoals },
     decisionSummary: out.decisionSummary,
@@ -143,21 +159,143 @@ export const realSeo: SeoModelCaller = async (prompt, modelId) => {
   };
 };
 
-export const realPpc: PpcModelCaller = async (prompt, modelId) => {
-  const out = await callClaudeForJson<{ budgetSplit: Record<string, number>; decisionSummary: string }>(
-    prompt,
-    modelId,
-    {
-      name: "submit_campaign_plan",
-      description: "Submit how the ad budget is split across channels (shares summing to ~1).",
-      inputSchema: {
-        type: "object",
-        properties: { budgetSplit: CHANNEL_SPLIT_SCHEMA, decisionSummary: { type: "string" } },
-        required: ["budgetSplit", "decisionSummary"],
-      },
+// 2026-08-30 — keywords/adCopy added: budgetSplit alone gave PPC's real
+// google-ads tool call nothing to build beyond an empty paused campaign
+// shell (see google-ads.ts's buildPausedSearchCampaign). Per-channel, both
+// optional in the schema since only google-ads's real tool call currently
+// acts on them — other channels can omit them.
+const CHANNEL_KEYWORDS_SCHEMA = {
+  type: "object" as const,
+  additionalProperties: { type: "array" as const, items: { type: "string" as const } },
+};
+const CHANNEL_AD_COPY_SCHEMA = {
+  type: "object" as const,
+  additionalProperties: {
+    type: "object" as const,
+    properties: {
+      headlines: { type: "array" as const, items: { type: "string" as const } },
+      descriptions: { type: "array" as const, items: { type: "string" as const } },
     },
-  );
-  return { result: { budgetSplit: out.budgetSplit }, decisionSummary: out.decisionSummary };
+    required: ["headlines", "descriptions"],
+  },
+};
+// negativeKeywords/callouts share keywords' shape; sitelinks is its own
+// per-channel array-of-objects shape. 2026-08-30 — geoTargetConstants/
+// languageConstants are deliberately NOT asked of the model: those need
+// real Google resource-name ids (e.g. "geoTargetConstants/1011969" for
+// Moscow) resolved via GeoTargetConstantService.suggestGeoTargetConstants,
+// which isn't wired anywhere in this codebase — asking the model would
+// just produce plausible-looking but almost certainly wrong ids that fail
+// at the Ads API, the same "void a real param" shape of bug found and
+// fixed elsewhere in this file, just inverted (garbage in, not blank in).
+const CHANNEL_SITELINKS_SCHEMA = {
+  type: "object" as const,
+  additionalProperties: {
+    type: "array" as const,
+    items: {
+      type: "object" as const,
+      properties: { text: { type: "string" as const }, finalUrl: { type: "string" as const } },
+      required: ["text", "finalUrl"],
+    },
+  },
+};
+
+export const realPpc: PpcSetupModelCaller = async (prompt, modelId) => {
+  const out = await callClaudeForJson<{
+    budgetSplit: Record<string, number>;
+    keywords?: Record<string, string[]>;
+    adCopy?: Record<string, { headlines: string[]; descriptions: string[] }>;
+    negativeKeywords?: Record<string, string[]>;
+    sitelinks?: Record<string, { text: string; finalUrl: string }[]>;
+    callouts?: Record<string, string[]>;
+    decisionSummary: string;
+  }>(prompt, modelId, {
+    name: "submit_campaign_plan",
+    description:
+      "Submit how the ad budget is split across channels (shares summing to ~1). " +
+      "For google-ads specifically, also submit: the search keywords to target; " +
+      "Responsive Search Ad copy (at least 3 headlines ≤30 chars each, at least 2 " +
+      "descriptions ≤90 chars each — Google Ads rejects an ad outside those bounds); " +
+      "negative keywords to exclude irrelevant traffic; optional sitelinks (link text " +
+      "≤25 chars) and callouts (≤25 chars) to strengthen the ad.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        budgetSplit: CHANNEL_SPLIT_SCHEMA,
+        keywords: CHANNEL_KEYWORDS_SCHEMA,
+        adCopy: CHANNEL_AD_COPY_SCHEMA,
+        negativeKeywords: CHANNEL_KEYWORDS_SCHEMA,
+        sitelinks: CHANNEL_SITELINKS_SCHEMA,
+        callouts: CHANNEL_KEYWORDS_SCHEMA,
+        decisionSummary: { type: "string" },
+      },
+      required: ["budgetSplit", "decisionSummary"],
+    },
+  });
+  return {
+    result: {
+      budgetSplit: out.budgetSplit,
+      keywords: out.keywords,
+      adCopy: out.adCopy,
+      negativeKeywords: out.negativeKeywords,
+      sitelinks: out.sitelinks,
+      callouts: out.callouts,
+    },
+    decisionSummary: out.decisionSummary,
+  };
+};
+
+// Track B (campaign optimization, 2026-08-30) — generalizes
+// .claude/agents/medavenue-analyst.md's verdict classification into a real
+// caller. campaignData already carries live campaign list/report + prior
+// changes (folded in by ppc-agent's handleRecommend before this is
+// called) — same "tool output before model call" grounding as realResearch.
+export const realPpcRecommend: PpcRecommendModelCaller = async (prompt, modelId, campaignData) => {
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [...prompt.clientFacts, `Данные по кампаниям (реальные, за последний период):\n${JSON.stringify(campaignData)}`],
+  };
+  const out = await callClaudeForJson<{
+    proposedChanges: Array<{
+      campaignId?: string;
+      campaignName?: string;
+      changeType: string;
+      changeDescription: string;
+      expectedEffect?: string;
+      verdict?: "scale" | "optimize" | "cut" | "pause" | "watch";
+    }>;
+    decisionSummary: string;
+  }>(groundedPrompt, modelId, {
+    name: "submit_recommendations",
+    description:
+      "Submit proposed optimization changes for these live campaigns, based only on the real campaign data provided — never invent a campaign or metric. changeType must be one of: budget_changed, weekly_spend_limit_changed, negative_added, bid_adjusted, status_changed. changeDescription must include the concrete parameters needed to apply the change as 'key: value' lines (e.g. for budget_changed: 'campaignBudgetResourceName: ...' and 'newAmountMicros: 5000000'; for negative_added: 'campaignResourceName: ...' and 'keywords: a, b, c'). Classify each campaign with a verdict: scale (increase investment), optimize (tighten targeting/bids), cut (reduce spend), pause (stop entirely), or watch (no action yet, insufficient data).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        proposedChanges: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              campaignId: { type: "string" },
+              campaignName: { type: "string" },
+              changeType: {
+                type: "string",
+                enum: ["budget_changed", "weekly_spend_limit_changed", "negative_added", "bid_adjusted", "status_changed"],
+              },
+              changeDescription: { type: "string" },
+              expectedEffect: { type: "string" },
+              verdict: { type: "string", enum: ["scale", "optimize", "cut", "pause", "watch"] },
+            },
+            required: ["changeType", "changeDescription"],
+          },
+        },
+        decisionSummary: { type: "string" },
+      },
+      required: ["proposedChanges", "decisionSummary"],
+    },
+  });
+  return out;
 };
 
 export const realMediaBuyer: MediaBuyerModelCaller = async (prompt, modelId) => {
@@ -236,8 +374,15 @@ export const realUx: UxModelCaller = async (prompt, modelId) => {
 };
 
 export const realUiDesigner: UiDesignerModelCaller = async (prompt, modelId, toolOutput) => {
+  // Was `void toolOutput` — same pattern as Copywriter/QA/Report Generator
+  // (2026-08-27 pilot run): the real design-tool call's actual result never
+  // reached the model, so designNotes described a mockup the model never saw.
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [...prompt.clientFacts, `Результат вызова design-tool:\n${JSON.stringify(toolOutput, null, 2)}`],
+  };
   const out = await callClaudeForJson<{ mockupRefs: string[]; designNotes: string; decisionSummary: string }>(
-    prompt,
+    groundedPrompt,
     modelId,
     {
       name: "submit_design",
@@ -253,7 +398,6 @@ export const realUiDesigner: UiDesignerModelCaller = async (prompt, modelId, too
       },
     },
   );
-  void toolOutput;
   return {
     design: { mockupRefs: out.mockupRefs, designNotes: out.designNotes },
     decisionSummary: out.decisionSummary,
@@ -261,7 +405,17 @@ export const realUiDesigner: UiDesignerModelCaller = async (prompt, modelId, too
 };
 
 export const realCopywriter: CopywriterModelCaller = async (prompt, modelId, briefs) => {
-  const out = await callClaudeForJson<{ texts: string[]; decisionSummary: string }>(prompt, modelId, {
+  // Was `void briefs` — the one argument carrying the actual brief content
+  // (research findings, strategy) was silently discarded, so the model
+  // wrote from the generic taskDescription alone and produced copy with no
+  // connection to the real client (see 2026-08-27 belseltur.com pilot run,
+  // where this produced generic sales copy with zero mention of the
+  // client's actual business).
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [...prompt.clientFacts, ...briefs.map((b, i) => `Бриф ${i + 1}:\n${b}`)],
+  };
+  const out = await callClaudeForJson<{ texts: string[]; decisionSummary: string }>(groundedPrompt, modelId, {
     name: "submit_copy",
     description: "Submit the written texts for the given briefs.",
     inputSchema: {
@@ -270,12 +424,18 @@ export const realCopywriter: CopywriterModelCaller = async (prompt, modelId, bri
       required: ["texts", "decisionSummary"],
     },
   });
-  void briefs;
   return { draft: { texts: out.texts }, decisionSummary: out.decisionSummary };
 };
 
 export const realFrontend: FrontendModelCaller = async (prompt, modelId, materials) => {
-  const out = await callClaudeForJson<{ html: string; decisionSummary: string }>(prompt, modelId, {
+  // Was `void materials` — same pattern as Copywriter/QA/Report Generator
+  // (2026-08-27 pilot run): the page got built from nothing, not from what
+  // the other roles actually produced.
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [...prompt.clientFacts, `Материалы для сборки страницы:\n${JSON.stringify(materials, null, 2)}`],
+  };
+  const out = await callClaudeForJson<{ html: string; decisionSummary: string }>(groundedPrompt, modelId, {
     name: "submit_build",
     description: "Submit the assembled page markup to deploy.",
     inputSchema: {
@@ -284,7 +444,6 @@ export const realFrontend: FrontendModelCaller = async (prompt, modelId, materia
       required: ["html", "decisionSummary"],
     },
   });
-  void materials;
   return { buildArtifact: { html: out.html }, decisionSummary: out.decisionSummary };
 };
 
@@ -323,8 +482,21 @@ export const realAnalytics: AnalyticsModelCaller = async (prompt, modelId, rawMe
 };
 
 export const realQa: QaModelCaller = async (prompt, modelId, artifact, checklistId) => {
+  // Was `void artifact; void checklistId` — QA never actually saw the
+  // thing it was reviewing, only the generic taskDescription. Its verdict
+  // ("materials not provided") was technically honest given what it
+  // received, but useless as review: it was rejecting an empty prompt, not
+  // checking the real artifact (see 2026-08-27 belseltur.com pilot run).
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [
+      ...prompt.clientFacts,
+      `Чек-лист: ${checklistId}`,
+      `Артефакт для проверки:\n${JSON.stringify(artifact, null, 2)}`,
+    ],
+  };
   const out = await callClaudeForJson<{ approved: boolean; issues: string[]; decisionSummary: string }>(
-    prompt,
+    groundedPrompt,
     modelId,
     {
       name: "submit_verdict",
@@ -340,13 +512,24 @@ export const realQa: QaModelCaller = async (prompt, modelId, artifact, checklist
       },
     },
   );
-  void artifact;
-  void checklistId;
   return { verdict: { approved: out.approved, issues: out.issues }, decisionSummary: out.decisionSummary };
 };
 
 export const realReport: ReportModelCaller = async (prompt, modelId, materials) => {
-  const out = await callClaudeForJson<{ narrativeSummary: string; decisionSummary: string }>(prompt, modelId, {
+  // Was `void materials` — report-generator-agent.ts already does the real
+  // work of reading each upstream Task's actual output from Project Memory
+  // into `materials`; discarding it here meant the model fabricated a
+  // plausible-sounding but content-free narrative instead of summarizing
+  // what was actually produced, with no error to signal it (see
+  // 2026-08-27 belseltur.com pilot run).
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [
+      ...prompt.clientFacts,
+      `Материалы, собранные от участвовавших ролей:\n${JSON.stringify(materials, null, 2)}`,
+    ],
+  };
+  const out = await callClaudeForJson<{ narrativeSummary: string; decisionSummary: string }>(groundedPrompt, modelId, {
     name: "submit_final_report",
     description: "Submit the narrative summary of the completed Project.",
     inputSchema: {
@@ -355,7 +538,6 @@ export const realReport: ReportModelCaller = async (prompt, modelId, materials) 
       required: ["narrativeSummary", "decisionSummary"],
     },
   });
-  void materials;
   return { narrativeSummary: out.narrativeSummary, decisionSummary: out.decisionSummary };
 };
 
@@ -370,6 +552,18 @@ export const realAgentArchitect: AgentArchitectModelCaller = async (
   roleDescription,
   existingRoleIds,
 ) => {
+  // Was `void roleDescription; void existingRoleIds;` (below, after the
+  // call) — same pattern found across every other role in the 2026-08-27
+  // pilot run: the model never saw what role was actually being requested,
+  // nor the existing roles it's supposed to check for overlap against.
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [
+      ...prompt.clientFacts,
+      `Описание запрашиваемой роли:\n${roleDescription}`,
+      `Существующие роли (проверить на пересечение):\n${existingRoleIds.join(", ")}`,
+    ],
+  };
   const out = await callClaudeForJson<{
     roleId: string;
     displayName: string;
@@ -380,7 +574,7 @@ export const realAgentArchitect: AgentArchitectModelCaller = async (
     toolIds: string[];
     overlapWarnings: string[];
     decisionSummary: string;
-  }>(prompt, modelId, {
+  }>(groundedPrompt, modelId, {
     name: "submit_role_spec_proposal",
     description:
       "Propose a new agent role spec by the standard contract. Flag any overlap with existing roles rather than assuming the boundary is clean.",
@@ -410,8 +604,6 @@ export const realAgentArchitect: AgentArchitectModelCaller = async (
       ],
     },
   });
-  void roleDescription;
-  void existingRoleIds;
   return {
     proposal: {
       roleId: asRoleId(out.roleId),

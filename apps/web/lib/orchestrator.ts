@@ -20,7 +20,7 @@ import { createCeoAgent, prepareCeoInvocation, type CeoModelCaller } from "@ama/
 import { createPmAgent, preparePmInvocation, type PmModelCaller } from "@ama/agent-pm";
 import { createResearchAgent, prepareResearchInvocation, type ResearchModelCaller } from "@ama/agent-research";
 import { createSeoAgent, prepareSeoInvocation, type SeoModelCaller } from "@ama/agent-seo";
-import { createPpcAgent, preparePpcInvocation, type PpcModelCaller } from "@ama/agent-ppc";
+import { createPpcAgent, preparePpcInvocation, type PpcSetupModelCaller } from "@ama/agent-ppc";
 import {
   createMediaBuyerAgent,
   prepareMediaBuyerInvocation,
@@ -171,7 +171,7 @@ const fakeSeo: SeoModelCaller = async () => ({
   recommendations: { targetKeywords: ["ключевое слово"], recommendations: ["добавить мета-описание"] },
   decisionSummary: "SEO-рекомендации сформированы.",
 });
-const fakePpc: PpcModelCaller = async () => ({
+const fakePpc: PpcSetupModelCaller = async () => ({
   result: { budgetSplit: { "google-ads": 0.6, "vk-ads": 0.4 } },
   decisionSummary: "Бюджет распределён 60/40 Google/VK.",
 });
@@ -421,10 +421,30 @@ export async function runNode(
       return createCreativeAgent(USE_REAL_MODELS ? real.realCreative : fakeCreative).invoke(agentInput);
     }
     case "frontend": {
+      // Was `materials: {}` — Frontend built the page from the bare task
+      // description alone, never seeing UI Designer's v0 mockup or
+      // Copywriter's text. `assemblePrompt`'s projectContext only surfaces
+      // string-valued Project Memory entries (see readStrings in
+      // @ama/prompt-architecture/assemble.ts), so UiDesign/CopyDraft objects
+      // never reach the prompt that way either — they have to come in
+      // through `materials`, read directly (not string-filtered) from each
+      // dependency's archived Project Memory entry, keyed by roleId so the
+      // model can tell a mockup from copy.
+      const materials: Record<string, unknown> = {};
+      for (const depTaskId of node.dependsOn) {
+        const depNode = record.graph?.nodes.find((n) => n.taskId === depTaskId);
+        if (!depNode) continue;
+        const value = store.read(AGENT_ACTOR, {
+          level: "project",
+          tenantId: OWNER_TENANT_ID,
+          key: `${record.projectId}:${relativeProjectMemoryKey(depNode.roleId, depTaskId)}`,
+        });
+        if (value !== undefined) materials[depNode.roleId] = value;
+      }
       const { agentInput } = prepareFrontendInvocation({
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "Frontend", responsibility: "Frontend only" },
-        context: c, taskDescription: "Опубликовать материалы.", materials: {},
+        context: c, taskDescription: "Опубликовать материалы.", materials,
         complexity: "standard", invokeTool: realToolInvoker,
       });
       return createFrontendAgent(USE_REAL_MODELS ? real.realFrontend : fakeFrontend).invoke(agentInput);

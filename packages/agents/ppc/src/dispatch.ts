@@ -4,7 +4,7 @@ import type { RoleTemplate } from "@ama/prompt-architecture";
 import type { CredentialStore, ToolInvoker, ToolRegistry } from "@ama/tools";
 import type { ModelCatalog, TaskComplexity } from "@ama/cost-router";
 import { prepareAgentInvocation } from "@ama/workflow-engine";
-import type { PpcTaskPayload } from "./ppc-agent.ts";
+import type { PpcApplyPayload, PpcRecommendPayload, PpcSetupPayload, PpcTaskPayload, PpcVerifyPayload } from "./ppc-agent.ts";
 
 const MEMORY_LEVELS = ["task", "project", "client_kb", "domain_kb"] as const;
 
@@ -39,10 +39,18 @@ export interface PreparePpcInvocationInput {
   readonly yandexClientLogin?: string;
   readonly metaAdAccountId?: string;
   readonly siteUrl: string;
+  readonly regionIds?: readonly number[];
+  readonly geoTargetConstants?: readonly string[];
+  readonly languageConstants?: readonly string[];
 }
 
 // Thin, role-specific wrapper over @ama/workflow-engine's generic
 // prepareAgentInvocation — see that module for what this actually does.
+// Unchanged since before the 2026-08-30 Track B extension — builds the
+// "setup" action's payload; the three new actions get their own prepare*
+// functions below rather than one function branching on action, since
+// their required inputs (clientAdAccountId vs. channels/siteUrl) don't
+// overlap enough to share one input interface cleanly.
 export function preparePpcInvocation(input: PreparePpcInvocationInput) {
   return prepareAgentInvocation<PpcTaskPayload>({
     store: input.store,
@@ -59,7 +67,8 @@ export function preparePpcInvocation(input: PreparePpcInvocationInput) {
     toolIds: input.channels,
     complexity: input.complexity,
     invokeTool: input.invokeTool,
-    buildPayload: (prompt, modelId) => ({
+    buildPayload: (prompt, modelId): PpcSetupPayload => ({
+      action: "setup",
       prompt,
       modelId,
       channels: input.channels,
@@ -67,6 +76,129 @@ export function preparePpcInvocation(input: PreparePpcInvocationInput) {
       yandexClientLogin: input.yandexClientLogin,
       metaAdAccountId: input.metaAdAccountId,
       siteUrl: input.siteUrl,
+      regionIds: input.regionIds,
+      geoTargetConstants: input.geoTargetConstants,
+      languageConstants: input.languageConstants,
+    }),
+  });
+}
+
+const OPTIMIZE_TOOL_IDS = ["google-ads-optimize", "yandex-direct-optimize", "client-context", "campaign-changes"] as const;
+
+export interface PreparePpcRecommendInvocationInput {
+  readonly store: MemoryStore;
+  readonly registry: ToolRegistry;
+  readonly credentials: CredentialStore;
+  readonly catalog: ModelCatalog;
+  readonly template: RoleTemplate;
+  readonly context: Readonly<InvocationContext>;
+  readonly taskDescription: string;
+  readonly clientAdAccountId: string;
+  readonly platform: "google-ads" | "yandex-direct";
+  readonly externalAccountId: string;
+  readonly conversionActionIdsOrGoalIds?: readonly string[];
+  readonly complexity: TaskComplexity;
+  readonly invokeTool: ToolInvoker;
+}
+
+export function preparePpcRecommendInvocation(input: PreparePpcRecommendInvocationInput) {
+  return prepareAgentInvocation<PpcTaskPayload>({
+    store: input.store,
+    registry: input.registry,
+    credentials: input.credentials,
+    catalog: input.catalog,
+    template: input.template,
+    context: input.context,
+    taskDescription: input.taskDescription,
+    clientFactKeys: [],
+    memoryLevels: [...MEMORY_LEVELS],
+    toolIds: [...OPTIMIZE_TOOL_IDS],
+    complexity: input.complexity,
+    invokeTool: input.invokeTool,
+    buildPayload: (prompt, modelId): PpcRecommendPayload => ({
+      action: "recommend",
+      prompt,
+      modelId,
+      clientAdAccountId: input.clientAdAccountId,
+      platform: input.platform,
+      externalAccountId: input.externalAccountId,
+      conversionActionIdsOrGoalIds: input.conversionActionIdsOrGoalIds,
+    }),
+  });
+}
+
+export interface PreparePpcApplyInvocationInput {
+  readonly store: MemoryStore;
+  readonly registry: ToolRegistry;
+  readonly credentials: CredentialStore;
+  readonly catalog: ModelCatalog;
+  readonly template: RoleTemplate;
+  readonly context: Readonly<InvocationContext>;
+  readonly taskDescription: string;
+  readonly changeLogId: string;
+  readonly platform: "google-ads" | "yandex-direct";
+  readonly externalAccountId: string;
+  readonly complexity: TaskComplexity;
+  readonly invokeTool: ToolInvoker;
+}
+
+export function preparePpcApplyInvocation(input: PreparePpcApplyInvocationInput) {
+  return prepareAgentInvocation<PpcTaskPayload>({
+    store: input.store,
+    registry: input.registry,
+    credentials: input.credentials,
+    catalog: input.catalog,
+    template: input.template,
+    context: input.context,
+    taskDescription: input.taskDescription,
+    clientFactKeys: [],
+    memoryLevels: [...MEMORY_LEVELS],
+    toolIds: [...OPTIMIZE_TOOL_IDS],
+    complexity: input.complexity,
+    invokeTool: input.invokeTool,
+    buildPayload: (): PpcApplyPayload => ({
+      action: "apply",
+      changeLogId: input.changeLogId,
+      platform: input.platform,
+      externalAccountId: input.externalAccountId,
+    }),
+  });
+}
+
+export interface PreparePpcVerifyInvocationInput {
+  readonly store: MemoryStore;
+  readonly registry: ToolRegistry;
+  readonly credentials: CredentialStore;
+  readonly catalog: ModelCatalog;
+  readonly template: RoleTemplate;
+  readonly context: Readonly<InvocationContext>;
+  readonly taskDescription: string;
+  readonly changeLogId: string;
+  readonly platform: "google-ads" | "yandex-direct";
+  readonly externalAccountId: string;
+  readonly complexity: TaskComplexity;
+  readonly invokeTool: ToolInvoker;
+}
+
+export function preparePpcVerifyInvocation(input: PreparePpcVerifyInvocationInput) {
+  return prepareAgentInvocation<PpcTaskPayload>({
+    store: input.store,
+    registry: input.registry,
+    credentials: input.credentials,
+    catalog: input.catalog,
+    template: input.template,
+    context: input.context,
+    taskDescription: input.taskDescription,
+    clientFactKeys: [],
+    memoryLevels: [...MEMORY_LEVELS],
+    toolIds: [...OPTIMIZE_TOOL_IDS],
+    complexity: input.complexity,
+    invokeTool: input.invokeTool,
+    buildPayload: (): PpcVerifyPayload => ({
+      action: "verify",
+      changeLogId: input.changeLogId,
+      platform: input.platform,
+      externalAccountId: input.externalAccountId,
     }),
   });
 }

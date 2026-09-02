@@ -19,7 +19,14 @@ export interface ResearchTaskPayload {
   readonly prompt: PromptBlocks;
   readonly modelId: string;
   readonly siteUrl: string;
-  readonly searchQuery: string;
+  // Optional refinement only (e.g. a region, or the marketing task at
+  // hand) — folded onto the site content, never the sole basis for the
+  // search query. A caller-authored topic guess written before the site
+  // was ever read produced a real, wrong-niche search in the 2026-08-27
+  // belseltur.com pilot run (a logistics/customs company searched as if it
+  // were a tourism business). The query now always grounds in the real,
+  // just-fetched site content first.
+  readonly searchQuery?: string;
 }
 
 export type ResearchModelCaller = (
@@ -44,8 +51,15 @@ export function createResearchAgent(callModel: ResearchModelCaller) {
       let siteContent: unknown;
       let searchResults: unknown;
       try {
+        // Site first, always — the search query is derived from what the
+        // site actually says, not guessed by whoever kicked off this Task.
         siteContent = await input.tools.invoke("site-reader", { url: input.task.payload.siteUrl });
-        searchResults = await input.tools.invoke("web-search", { query: input.task.payload.searchQuery });
+        const hint = input.task.payload.searchQuery;
+        const query =
+          `Рынок, конкуренты и типичные рекламные показатели (CTR, CPC, конверсия) для бизнеса, ` +
+          `судя по содержимому его сайта:\n${String(siteContent).slice(0, 800)}` +
+          (hint ? `\n\nДополнительный фокус: ${hint}` : "");
+        searchResults = await input.tools.invoke("web-search", { query });
       } catch (error) {
         return { status: "failed", error: error as AgentError };
       }

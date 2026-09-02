@@ -18,7 +18,7 @@ export interface PrepareResearchInvocationInput {
   readonly context: Readonly<InvocationContext>;
   readonly taskDescription: string;
   readonly siteUrl: string;
-  readonly searchQuery: string;
+  readonly searchQuery?: string;
   readonly complexity: TaskComplexity;
   readonly invokeTool: ToolInvoker;
 }

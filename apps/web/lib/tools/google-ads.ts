@@ -143,6 +143,29 @@ export async function listConversionActions(
   });
 }
 
+// 2026-08-30 — the piece that finishes "GTM → GA4 → Google Ads": until
+// now, linkToGoogleAds (google-analytics.ts) only makes GA4 key events
+// *available* to import; nothing created the Ads-side ConversionAction
+// that actually finishes the import. Confirmed by real API behavior, not
+// assumed: creating a GOOGLE_ANALYTICS_4_CUSTOM/PURCHASE ConversionAction
+// via conversionActions:mutate is REJECTED by Google Ads API outright
+// ("Creation of this conversion action type isn't supported by Google Ads
+// API" — https://developers.google.com/google-ads/api/docs/conversions/categories,
+// https://groups.google.com/g/adwords-api/c/8pgVMMieznM). There is no API
+// path to finish this step; it is a manual click in the Ads UI (Goals and
+// conversions → Conversion actions → + New → Import → Google Analytics 4
+// properties). What IS real and useful here: once a GA4 property is
+// linked, its key events already show up via listConversionActions with
+// status HIDDEN until a human imports them — this surfaces exactly which
+// ones are waiting, instead of leaving that invisible.
+export async function listGa4ImportCandidates(
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<readonly ConversionAction[]> {
+  const all = await listConversionActions(customerId, options);
+  return all.filter((ca) => ca.type.startsWith("GOOGLE_ANALYTICS_4") && ca.status === "HIDDEN");
+}
+
 // Real finding (2026-08-19): a Google Ads account's cost is reported in
 // its own currency (Медавеню's: USD), separate from — and not
 // interchangeable with — a Yandex Direct account's currency (BYN). See
@@ -157,6 +180,66 @@ export async function getAccountCurrency(customerId: string, options: GoogleAdsC
   const currencyCode = data.results?.[0]?.customer.currencyCode;
   if (!currencyCode) throw new Error(`Could not determine currency for customer ${customerId}`);
   return currencyCode;
+}
+
+export interface KeywordIdea {
+  readonly text: string;
+  readonly avgMonthlySearches?: number;
+  readonly competition?: string; // LOW | MEDIUM | HIGH | UNSPECIFIED
+  readonly lowTopOfPageBidMicros?: number;
+  readonly highTopOfPageBidMicros?: number;
+}
+
+// KeywordPlanIdeaService.GenerateKeywordIdeas (2026-08-30) — grounds PPC's
+// keyword/budget decisions in real search volume and real top-of-page bid
+// ranges instead of the model guessing both with no data (see
+// docs/07-planning/backlog.md #29). No new credential needed: this is the
+// same Google Ads API surface as everything else in this file, just a
+// different RPC. keywordSeed + one of urlSeed/geoTargetConstants — Google
+// requires at least a keyword or URL seed, geo/language narrow the
+// estimate to the actual target market (same geoTargetConstants/
+// languageConstants resource-name shape as addGeoAndLanguageTargeting).
+export async function getKeywordIdeas(
+  seedKeywords: readonly string[],
+  customerId: string,
+  params: { readonly geoTargetConstants?: readonly string[]; readonly languageConstant?: string } = {},
+  options: GoogleAdsCallOptions = {},
+): Promise<readonly KeywordIdea[]> {
+  if (seedKeywords.length === 0) return [];
+  const data = (await callGoogleAds(
+    customerId,
+    ":generateKeywordIdeas",
+    {
+      keywordSeed: { keywords: seedKeywords },
+      geoTargetConstants: params.geoTargetConstants,
+      language: params.languageConstant,
+      keywordPlanNetwork: "GOOGLE_SEARCH",
+    },
+    options,
+  )) as {
+    results?: ReadonlyArray<{
+      text?: string;
+      keywordIdeaMetrics?: {
+        avgMonthlySearches?: string;
+        competition?: string;
+        lowTopOfPageBidMicros?: string;
+        highTopOfPageBidMicros?: string;
+      };
+    }>;
+  };
+  return (data.results ?? [])
+    .filter((r): r is typeof r & { text: string } => Boolean(r.text))
+    .map((r) => ({
+      text: r.text,
+      avgMonthlySearches: r.keywordIdeaMetrics?.avgMonthlySearches ? Number(r.keywordIdeaMetrics.avgMonthlySearches) : undefined,
+      competition: r.keywordIdeaMetrics?.competition,
+      lowTopOfPageBidMicros: r.keywordIdeaMetrics?.lowTopOfPageBidMicros
+        ? Number(r.keywordIdeaMetrics.lowTopOfPageBidMicros)
+        : undefined,
+      highTopOfPageBidMicros: r.keywordIdeaMetrics?.highTopOfPageBidMicros
+        ? Number(r.keywordIdeaMetrics.highTopOfPageBidMicros)
+        : undefined,
+    }));
 }
 
 export interface CampaignReportRow {
@@ -252,6 +335,12 @@ export async function getCampaignReport(
 // ad groups/keywords/ads yet — a real but empty shell. Idempotent per call:
 // if a campaign with the same name already exists, it's reused rather than
 // duplicated (repeated task runs/tests shouldn't flood the account).
+//
+// 2026-08-30 — kept as its own exported function (not folded into
+// buildPausedSearchCampaign below) because PPC's tool call falls back to
+// this shell when the model didn't produce keywords/ad copy for a channel
+// (real-tools.ts's "google-ads" case) — an empty paused campaign is still
+// useful for a human to finish by hand, and better than failing the Task.
 export async function createOrReusePausedCampaign(
   name: string,
   budgetShare: number,
@@ -315,4 +404,547 @@ export async function createOrReusePausedCampaign(
   )) as { results: ReadonlyArray<{ resourceName: string }> };
 
   return { campaignResourceName: campaignData.results[0].resourceName, reused: false };
+}
+
+// ---------------------------------------------------------------------
+// Ad group / keywords / ad — 2026-08-30. Until this point,
+// createOrReusePausedCampaign only ever produced "a real but empty shell":
+// no ad group, no keywords, no ad, so nothing a PPC Agent decided (target
+// keywords, ad copy) ever reached a real campaign object. This closes that
+// gap. Still safe: the campaign itself stays PAUSED (created above), and
+// the ad is additionally created PAUSED itself — belt and suspenders, even
+// though a paused campaign alone already guarantees no spend.
+// ---------------------------------------------------------------------
+
+interface GaqlAdGroupSearchResponse {
+  readonly results?: ReadonlyArray<{
+    readonly adGroup?: { readonly id?: string; readonly resourceName?: string; readonly name?: string };
+  }>;
+}
+
+async function findAdGroupByName(
+  campaignId: string,
+  name: string,
+  customerId: string,
+  options: GoogleAdsCallOptions,
+): Promise<{ readonly resourceName: string; readonly id: string } | undefined> {
+  const escaped = name.replace(/'/g, "\\'");
+  const data = (await callGoogleAds(
+    customerId,
+    "/googleAds:search",
+    {
+      query: `SELECT ad_group.id, ad_group.resource_name, ad_group.name FROM ad_group
+              WHERE campaign.id = ${campaignId} AND ad_group.name = '${escaped}'`,
+    },
+    options,
+  )) as GaqlAdGroupSearchResponse;
+  const match = data.results?.[0]?.adGroup;
+  return match?.resourceName && match.id ? { resourceName: match.resourceName, id: match.id } : undefined;
+}
+
+async function createAdGroup(
+  campaignResourceName: string,
+  name: string,
+  customerId: string,
+  options: GoogleAdsCallOptions,
+): Promise<string> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/adGroups:mutate",
+    {
+      operations: [
+        {
+          create: {
+            name,
+            campaign: campaignResourceName,
+            status: "ENABLED", // the ad itself is PAUSED below; the campaign (already PAUSED) is what actually gates spend
+            type: "SEARCH_STANDARD",
+          },
+        },
+      ],
+    },
+    options,
+  )) as { results: ReadonlyArray<{ resourceName: string }> };
+  return data.results[0].resourceName;
+}
+
+// PHRASE match by default — a deliberate middle ground: narrower than
+// BROAD (which can match wildly unrelated searches and burn budget once
+// unpaused), looser than EXACT (which would need every literal query
+// variant spelled out). A human reviewing the paused campaign can tighten
+// or loosen per keyword before launch.
+//
+// partialFailure: true (2026-08-30, ported from PPC Master Tool's
+// create_da_by_new_campaigns.py) — without it, a single keyword rejected
+// by policy/moderation fails the whole batch mutate and no keywords reach
+// the ad group at all. With it, rejected operations are reported in
+// partialFailureError while every other keyword in the same call still
+// gets created. Returns the rejected keyword texts (empty if none) so the
+// caller can surface them instead of silently losing them.
+async function addKeywords(
+  adGroupResourceName: string,
+  keywords: readonly string[],
+  customerId: string,
+  options: GoogleAdsCallOptions,
+): Promise<readonly string[]> {
+  if (keywords.length === 0) return [];
+  const data = (await callGoogleAds(
+    customerId,
+    "/adGroupCriteria:mutate",
+    {
+      partialFailure: true,
+      operations: keywords.map((text) => ({
+        create: {
+          adGroup: adGroupResourceName,
+          status: "ENABLED",
+          keyword: { text, matchType: "PHRASE" },
+        },
+      })),
+    },
+    options,
+  )) as { results?: ReadonlyArray<unknown>; partialFailureError?: { details?: ReadonlyArray<{ errors?: ReadonlyArray<{ location?: { fieldPathElements?: ReadonlyArray<{ index?: number }> } }> }> } };
+
+  const failedIndexes = new Set<number>();
+  for (const detail of data.partialFailureError?.details ?? []) {
+    for (const err of detail.errors ?? []) {
+      const opIndex = err.location?.fieldPathElements?.find((el) => el.index !== undefined)?.index;
+      if (opIndex !== undefined) failedIndexes.add(opIndex);
+    }
+  }
+  return keywords.filter((_, i) => failedIndexes.has(i));
+}
+
+export type NegativeKeywordMatchType = "EXACT" | "PHRASE" | "BROAD";
+
+// Adds negative keywords to a campaign that already exists — usable both at
+// creation time (buildPausedSearchCampaign, below) and, since 2026-08-30
+// (Track B), against a live client campaign from packages/agents/ppc's
+// "apply" action. NOT idempotent: Google allows duplicate negative
+// criteria, so callers must not re-run this against an already-applied
+// campaign_changes_log row (see this file's module comment above
+// setCampaignStatus for the guard that matters).
+export async function addNegativeKeywordsToExistingCampaign(
+  campaignResourceName: string,
+  keywords: readonly string[],
+  customerId: string,
+  matchType: NegativeKeywordMatchType = "EXACT",
+  options: GoogleAdsCallOptions = {},
+): Promise<{ readonly addedCount: number }> {
+  if (keywords.length === 0) return { addedCount: 0 };
+  await callGoogleAds(
+    customerId,
+    "/campaignCriteria:mutate",
+    {
+      operations: keywords.map((text) => ({
+        create: { campaign: campaignResourceName, negative: true, keyword: { text, matchType } },
+      })),
+    },
+    options,
+  );
+  return { addedCount: keywords.length };
+}
+
+// Campaign-level negative keywords at creation time — applied once at the
+// campaign, not per ad group, since PPC's model output produces one
+// negative list per channel today (real-tools.ts), not per ad group. Thin
+// wrapper over the public function above so both call sites (creation and
+// later optimization) share one real API call, not two copies.
+async function addCampaignNegativeKeywords(
+  campaignResourceName: string,
+  negativeKeywords: readonly string[],
+  customerId: string,
+  options: GoogleAdsCallOptions,
+): Promise<void> {
+  await addNegativeKeywordsToExistingCampaign(campaignResourceName, negativeKeywords, customerId, "EXACT", options);
+}
+
+// Geo + language targeting via CampaignCriterion — until this point
+// buildPausedSearchCampaign created campaigns with no location/language
+// targeting at all, which for a real launch means "wrong audience", not
+// just "less optimal". Callers pass resource names directly
+// (geoTargetConstants/<id>, languageConstants/<id> — e.g. "1011969" for
+// Moscow, "1000" for Russian) rather than free-text region names: Google
+// requires the resolved constant, and guessing the right one from a city
+// name is a separate lookup (GeoTargetConstantService.suggestGeoTargetConstants)
+// not implemented here.
+async function addGeoAndLanguageTargeting(
+  campaignResourceName: string,
+  targeting: { readonly geoTargetConstants?: readonly string[]; readonly languageConstants?: readonly string[] },
+  customerId: string,
+  options: GoogleAdsCallOptions,
+): Promise<void> {
+  const operations = [
+    ...(targeting.geoTargetConstants ?? []).map((resourceName) => ({
+      create: { campaign: campaignResourceName, location: { geoTargetConstant: resourceName } },
+    })),
+    ...(targeting.languageConstants ?? []).map((resourceName) => ({
+      create: { campaign: campaignResourceName, language: { languageConstant: resourceName } },
+    })),
+  ];
+  if (operations.length === 0) return;
+  await callGoogleAds(customerId, "/campaignCriteria:mutate", { operations }, options);
+}
+
+export interface Sitelink {
+  readonly text: string; // ≤25 chars
+  readonly finalUrl: string;
+}
+
+// Sitelinks/callouts are campaign-level extensions here (not per-ad-group)
+// — same reasoning as negative keywords above. Uses the v25 asset +
+// campaignAsset two-step: create the asset, then link it to the campaign
+// with the right AssetFieldType.
+async function addSitelinksAndCallouts(
+  campaignResourceName: string,
+  extras: { readonly sitelinks?: readonly Sitelink[]; readonly callouts?: readonly string[] },
+  customerId: string,
+  options: GoogleAdsCallOptions,
+): Promise<void> {
+  const assetOps = [
+    ...(extras.sitelinks ?? []).map((s) => ({
+      create: { sitelinkAsset: { linkText: s.text, finalUrls: [s.finalUrl] } },
+    })),
+    ...(extras.callouts ?? []).map((text) => ({
+      create: { calloutAsset: { calloutText: text } },
+    })),
+  ];
+  if (assetOps.length === 0) return;
+
+  const assetData = (await callGoogleAds(customerId, "/assets:mutate", { operations: assetOps }, options)) as {
+    results: ReadonlyArray<{ resourceName: string }>;
+  };
+
+  const sitelinkCount = extras.sitelinks?.length ?? 0;
+  const campaignAssetOps = assetData.results.map((r, i) => ({
+    create: {
+      campaign: campaignResourceName,
+      asset: r.resourceName,
+      fieldType: i < sitelinkCount ? "SITELINK" : "CALLOUT",
+    },
+  }));
+  await callGoogleAds(customerId, "/campaignAssets:mutate", { operations: campaignAssetOps }, options);
+}
+
+export interface ResponsiveSearchAdCopy {
+  readonly headlines: readonly string[]; // Google requires 3–15, each ≤30 chars
+  readonly descriptions: readonly string[]; // Google requires 2–4, each ≤90 chars
+}
+
+async function createResponsiveSearchAd(
+  adGroupResourceName: string,
+  finalUrl: string,
+  copy: ResponsiveSearchAdCopy,
+  customerId: string,
+  options: GoogleAdsCallOptions,
+): Promise<void> {
+  // Validated here, not just left to the API's error, so a caller gets a
+  // clear reason instead of a raw 400 buried in a mutate response — Google
+  // rejects an RSA outside these bounds either way.
+  if (copy.headlines.length < 3) {
+    throw new Error(`Responsive Search Ad needs at least 3 headlines, got ${copy.headlines.length}`);
+  }
+  if (copy.descriptions.length < 2) {
+    throw new Error(`Responsive Search Ad needs at least 2 descriptions, got ${copy.descriptions.length}`);
+  }
+  await callGoogleAds(
+    customerId,
+    "/adGroupAds:mutate",
+    {
+      operations: [
+        {
+          create: {
+            adGroup: adGroupResourceName,
+            status: "PAUSED",
+            ad: {
+              finalUrls: [finalUrl],
+              responsiveSearchAd: {
+                headlines: copy.headlines.slice(0, 15).map((text) => ({ text })),
+                descriptions: copy.descriptions.slice(0, 4).map((text) => ({ text })),
+              },
+            },
+          },
+        },
+      ],
+    },
+    options,
+  );
+}
+
+export interface SearchCampaignTargeting {
+  readonly keywords: readonly string[];
+  readonly adCopy: ResponsiveSearchAdCopy;
+  readonly finalUrl: string;
+  // All optional and additive — omitting any of these preserves the exact
+  // prior behavior (empty campaign-level negatives/extensions/geo).
+  readonly negativeKeywords?: readonly string[];
+  readonly sitelinks?: readonly Sitelink[];
+  readonly callouts?: readonly string[];
+  readonly geoTargetConstants?: readonly string[]; // e.g. ["geoTargetConstants/1011969"] for Moscow
+  readonly languageConstants?: readonly string[]; // e.g. ["languageConstants/1000"] for Russian
+}
+
+export interface BuiltSearchCampaign {
+  readonly campaignResourceName: string;
+  readonly adGroupResourceName: string;
+  readonly reused: boolean; // true if either the campaign or the ad group already existed — nothing new was created in that case
+  readonly rejectedKeywords: readonly string[]; // keywords Google rejected (policy/moderation) — empty when nothing was, or the ad group was reused
+}
+
+// Pure, offline preview of what buildPausedSearchCampaign would send —
+// zero network calls, so it's safe to show a human before committing to
+// the real thing (ported pattern: PPC Master Tool's campaign-creation
+// scripts print this same kind of plan under a --dry-run flag instead of
+// calling the API). Deliberately doesn't check for an existing
+// campaign/ad group by the same name — that check itself requires a real
+// API read, and a preview's whole point is running with zero
+// preconditions. Callers that need an accurate reused/not-reused verdict
+// still have to call buildPausedSearchCampaign for real.
+export function previewSearchCampaign(
+  name: string,
+  budgetShare: number,
+  targeting: SearchCampaignTargeting,
+): {
+  readonly campaign: { readonly name: string; readonly dailyBudgetMicros: number };
+  readonly adGroup: { readonly name: string; readonly keywordCount: number; readonly keywords: readonly string[] };
+  readonly ad: ResponsiveSearchAdCopy & { readonly finalUrl: string };
+  readonly negativeKeywords: readonly string[];
+  readonly sitelinks: readonly Sitelink[];
+  readonly callouts: readonly string[];
+  readonly geoTargetConstants: readonly string[];
+  readonly languageConstants: readonly string[];
+} {
+  const dailyBudgetMicros = Math.max(
+    MIN_DAILY_BUDGET_MICROS,
+    Math.round(DEFAULT_TOTAL_DAILY_BUDGET_MICROS * budgetShare),
+  );
+  return {
+    campaign: { name, dailyBudgetMicros },
+    adGroup: { name: `${name} — Ad Group`, keywordCount: targeting.keywords.length, keywords: targeting.keywords },
+    ad: { ...targeting.adCopy, finalUrl: targeting.finalUrl },
+    negativeKeywords: targeting.negativeKeywords ?? [],
+    sitelinks: targeting.sitelinks ?? [],
+    callouts: targeting.callouts ?? [],
+    geoTargetConstants: targeting.geoTargetConstants ?? [],
+    languageConstants: targeting.languageConstants ?? [],
+  };
+}
+
+// The real, non-empty version of createOrReusePausedCampaign: campaign +
+// one ad group + keywords + one Responsive Search Ad, all idempotent by
+// name so re-running the same Task doesn't duplicate anything. Everything
+// stays PAUSED end to end — see the module comment at the top of this file.
+export async function buildPausedSearchCampaign(
+  name: string,
+  budgetShare: number,
+  targeting: SearchCampaignTargeting,
+  customerId?: string,
+  options: GoogleAdsCallOptions = { loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID },
+): Promise<BuiltSearchCampaign> {
+  const resolvedCustomerId = resolveCustomerId(customerId);
+  const campaign = await createOrReusePausedCampaign(name, budgetShare, resolvedCustomerId, options);
+  const campaignId = campaign.campaignResourceName.split("/").pop();
+  if (!campaignId) throw new Error(`Could not parse campaign id from ${campaign.campaignResourceName}`);
+
+  const adGroupName = `${name} — Ad Group`;
+  const existingAdGroup = await findAdGroupByName(campaignId, adGroupName, resolvedCustomerId, options);
+  if (existingAdGroup) {
+    return {
+      campaignResourceName: campaign.campaignResourceName,
+      adGroupResourceName: existingAdGroup.resourceName,
+      reused: true,
+      rejectedKeywords: [],
+    };
+  }
+
+  const adGroupResourceName = await createAdGroup(campaign.campaignResourceName, adGroupName, resolvedCustomerId, options);
+  const rejectedKeywords = await addKeywords(adGroupResourceName, targeting.keywords, resolvedCustomerId, options);
+  await createResponsiveSearchAd(adGroupResourceName, targeting.finalUrl, targeting.adCopy, resolvedCustomerId, options);
+
+  // Only meaningful on a freshly created campaign — a reused campaign
+  // (campaign.reused === true, checked inside createOrReusePausedCampaign)
+  // already has whatever negatives/extensions/geo it was given the first
+  // time, and re-applying here would either duplicate them or is simply
+  // redundant work against the same idempotency guarantee the rest of
+  // this function relies on.
+  if (!campaign.reused) {
+    if (targeting.negativeKeywords?.length) {
+      await addCampaignNegativeKeywords(campaign.campaignResourceName, targeting.negativeKeywords, resolvedCustomerId, options);
+    }
+    if (targeting.sitelinks?.length || targeting.callouts?.length) {
+      await addSitelinksAndCallouts(
+        campaign.campaignResourceName,
+        { sitelinks: targeting.sitelinks, callouts: targeting.callouts },
+        resolvedCustomerId,
+        options,
+      );
+    }
+    if (targeting.geoTargetConstants?.length || targeting.languageConstants?.length) {
+      await addGeoAndLanguageTargeting(
+        campaign.campaignResourceName,
+        { geoTargetConstants: targeting.geoTargetConstants, languageConstants: targeting.languageConstants },
+        resolvedCustomerId,
+        options,
+      );
+    }
+  }
+
+  return { campaignResourceName: campaign.campaignResourceName, adGroupResourceName, reused: false, rejectedKeywords };
+}
+
+export interface AdGroupTargeting {
+  readonly name: string;
+  readonly keywords: readonly string[];
+  readonly adCopy: ResponsiveSearchAdCopy;
+}
+
+export interface BuiltAdGroup {
+  readonly name: string;
+  readonly adGroupResourceName: string;
+  readonly reused: boolean;
+  readonly rejectedKeywords: readonly string[];
+}
+
+export interface MultiGroupSearchCampaign {
+  readonly campaignResourceName: string;
+  readonly reused: boolean;
+  readonly adGroups: readonly BuiltAdGroup[];
+}
+
+// The real "several ad groups by intent under one campaign" structure —
+// ported from PPC Master Tool's scripts/create_google_gastro.py, which
+// used exactly this shape (Campaign → 3 AdGroups → keywords + one RSA
+// each) to build a real МедАвеню campaign (customer 9714539590,
+// "Гастроэнтеролог"). buildPausedSearchCampaign above only ever builds ONE
+// ad group per call — this is the multi-group generalization
+// packages/agents/ppc's PpcSetupResult needed (see
+// docs/07-planning/backlog.md #31 and the schema change in
+// packages/agents/ppc/src/ppc-agent.ts) to express "имплантация" and
+// "протезирование" as separate ad groups under the same campaign instead
+// of flattening every direction into a single keyword list. Reuses the
+// same private helpers as buildPausedSearchCampaign — same idempotency,
+// same PAUSED-throughout guarantee.
+export async function buildMultiGroupSearchCampaign(
+  name: string,
+  budgetShare: number,
+  finalUrl: string,
+  adGroups: readonly AdGroupTargeting[],
+  extras: {
+    readonly negativeKeywords?: readonly string[];
+    readonly sitelinks?: readonly Sitelink[];
+    readonly callouts?: readonly string[];
+    readonly geoTargetConstants?: readonly string[];
+    readonly languageConstants?: readonly string[];
+  } = {},
+  customerId?: string,
+  options: GoogleAdsCallOptions = { loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID },
+): Promise<MultiGroupSearchCampaign> {
+  const resolvedCustomerId = resolveCustomerId(customerId);
+  const campaign = await createOrReusePausedCampaign(name, budgetShare, resolvedCustomerId, options);
+  const campaignId = campaign.campaignResourceName.split("/").pop();
+  if (!campaignId) throw new Error(`Could not parse campaign id from ${campaign.campaignResourceName}`);
+
+  const results: BuiltAdGroup[] = [];
+  for (const group of adGroups) {
+    const existingAdGroup = await findAdGroupByName(campaignId, group.name, resolvedCustomerId, options);
+    if (existingAdGroup) {
+      results.push({ name: group.name, adGroupResourceName: existingAdGroup.resourceName, reused: true, rejectedKeywords: [] });
+      continue;
+    }
+    const adGroupResourceName = await createAdGroup(campaign.campaignResourceName, group.name, resolvedCustomerId, options);
+    const rejectedKeywords = await addKeywords(adGroupResourceName, group.keywords, resolvedCustomerId, options);
+    await createResponsiveSearchAd(adGroupResourceName, finalUrl, group.adCopy, resolvedCustomerId, options);
+    results.push({ name: group.name, adGroupResourceName, reused: false, rejectedKeywords });
+  }
+
+  // Only meaningful on a freshly created campaign — same reasoning as
+  // buildPausedSearchCampaign: a reused campaign already has whatever
+  // negatives/extensions/geo it was given the first time.
+  if (!campaign.reused) {
+    if (extras.negativeKeywords?.length) {
+      await addCampaignNegativeKeywords(campaign.campaignResourceName, extras.negativeKeywords, resolvedCustomerId, options);
+    }
+    if (extras.sitelinks?.length || extras.callouts?.length) {
+      await addSitelinksAndCallouts(campaign.campaignResourceName, extras, resolvedCustomerId, options);
+    }
+    if (extras.geoTargetConstants?.length || extras.languageConstants?.length) {
+      await addGeoAndLanguageTargeting(campaign.campaignResourceName, extras, resolvedCustomerId, options);
+    }
+  }
+
+  return { campaignResourceName: campaign.campaignResourceName, reused: campaign.reused, adGroups: results };
+}
+
+// ---------------------------------------------------------------------
+// Existing-campaign optimization writes (2026-08-30, Track B / backlog
+// campaign-optimization plan). Everything above this point only ever
+// creates NEW campaigns; a live campaign already running for a real client
+// had no write path at all until now. These close that gap for
+// packages/agents/ppc's "apply" action — it only ever calls these against
+// campaign_changes_log rows already status='approved' by a human (see that
+// package's own guard); nothing here enforces that itself, by design, the
+// same "campaign always created PAUSED" pattern as the rest of this file:
+// safety lives at the call site that decides *whether* to call, not inside
+// the API wrapper.
+// ---------------------------------------------------------------------
+
+// Budget/bid changes are naturally idempotent (setting the same value twice
+// is a no-op on Google's side) — unlike addNegativeKeywordsToExistingCampaign
+// above, no separate idempotency note needed here.
+export async function adjustCampaignBudget(
+  campaignBudgetResourceName: string,
+  newAmountMicros: number,
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<{ readonly resourceName: string }> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/campaignBudgets:mutate",
+    {
+      operations: [
+        {
+          update: { resourceName: campaignBudgetResourceName, amountMicros: String(newAmountMicros) },
+          updateMask: "amountMicros",
+        },
+      ],
+    },
+    options,
+  )) as { results: ReadonlyArray<{ resourceName: string }> };
+  return { resourceName: data.results[0].resourceName };
+}
+
+export async function adjustAdGroupCriterionBid(
+  adGroupCriterionResourceName: string,
+  newCpcBidMicros: number,
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<{ readonly resourceName: string }> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/adGroupCriteria:mutate",
+    {
+      operations: [
+        {
+          update: { resourceName: adGroupCriterionResourceName, cpcBidMicros: String(newCpcBidMicros) },
+          updateMask: "cpcBidMicros",
+        },
+      ],
+    },
+    options,
+  )) as { results: ReadonlyArray<{ resourceName: string }> };
+  return { resourceName: data.results[0].resourceName };
+}
+
+export async function setCampaignStatus(
+  campaignResourceName: string,
+  status: "ENABLED" | "PAUSED",
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<{ readonly resourceName: string }> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/campaigns:mutate",
+    { operations: [{ update: { resourceName: campaignResourceName, status }, updateMask: "status" }] },
+    options,
+  )) as { results: ReadonlyArray<{ resourceName: string }> };
+  return { resourceName: data.results[0].resourceName };
 }

@@ -14,6 +14,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@ama/agent-agency-researcher':
+        specifier: workspace:*
+        version: link:../../packages/agents/agency-researcher
       '@ama/agent-agent-architect':
         specifier: workspace:*
         version: link:../../packages/agents/agent-architect
@@ -23,21 +26,36 @@ importers:
       '@ama/agent-ceo':
         specifier: workspace:*
         version: link:../../packages/agents/ceo
+      '@ama/agent-compliance-checker':
+        specifier: workspace:*
+        version: link:../../packages/agents/compliance-checker
       '@ama/agent-copywriter':
         specifier: workspace:*
         version: link:../../packages/agents/copywriter
       '@ama/agent-creative':
         specifier: workspace:*
         version: link:../../packages/agents/creative
+      '@ama/agent-decision-maker-finder':
+        specifier: workspace:*
+        version: link:../../packages/agents/decision-maker-finder
       '@ama/agent-framework':
         specifier: workspace:*
         version: link:../../packages/agent-framework
       '@ama/agent-frontend':
         specifier: workspace:*
         version: link:../../packages/agents/frontend
+      '@ama/agent-lead-finder':
+        specifier: workspace:*
+        version: link:../../packages/agents/lead-finder
+      '@ama/agent-lead-scorer':
+        specifier: workspace:*
+        version: link:../../packages/agents/lead-scorer
       '@ama/agent-media-buyer':
         specifier: workspace:*
         version: link:../../packages/agents/media-buyer
+      '@ama/agent-outreach-copywriter':
+        specifier: workspace:*
+        version: link:../../packages/agents/outreach-copywriter
       '@ama/agent-pm':
         specifier: workspace:*
         version: link:../../packages/agents/pm
@@ -50,6 +68,9 @@ importers:
       '@ama/agent-reflection':
         specifier: workspace:*
         version: link:../../packages/agents/reflection
+      '@ama/agent-reply-classifier':
+        specifier: workspace:*
+        version: link:../../packages/agents/reply-classifier
       '@ama/agent-report-generator':
         specifier: workspace:*
         version: link:../../packages/agents/report-generator
@@ -74,6 +95,9 @@ importers:
       '@ama/knowledge-base':
         specifier: workspace:*
         version: link:../../packages/knowledge-base
+      '@ama/learning':
+        specifier: workspace:*
+        version: link:../../packages/learning
       '@ama/memory':
         specifier: workspace:*
         version: link:../../packages/memory
@@ -125,6 +149,31 @@ importers:
         version: 5.9.3
 
   packages/agent-framework:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
+  packages/agents/agency-researcher:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -217,6 +266,31 @@ importers:
         specifier: ^22.0.0
         version: 22.20.1
 
+  packages/agents/compliance-checker:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
   packages/agents/copywriter:
     dependencies:
       '@ama/agent-framework':
@@ -279,6 +353,31 @@ importers:
         specifier: ^22.0.0
         version: 22.20.1
 
+  packages/agents/decision-maker-finder:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
   packages/agents/frontend:
     dependencies:
       '@ama/agent-framework':
@@ -307,6 +406,56 @@ importers:
         specifier: ^22.0.0
         version: 22.20.1
 
+  packages/agents/lead-finder:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
+  packages/agents/lead-scorer:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
   packages/agents/media-buyer:
     dependencies:
       '@ama/agent-framework':
@@ -318,6 +467,31 @@ importers:
       '@ama/knowledge-base':
         specifier: workspace:*
         version: link:../../knowledge-base
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
+  packages/agents/outreach-copywriter:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
       '@ama/memory':
         specifier: workspace:*
         version: link:../../memory
@@ -433,6 +607,31 @@ importers:
       '@ama/memory':
         specifier: workspace:*
         version: link:../../memory
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+
+  packages/agents/reply-classifier:
+    dependencies:
+      '@ama/agent-framework':
+        specifier: workspace:*
+        version: link:../../agent-framework
+      '@ama/cost-router':
+        specifier: workspace:*
+        version: link:../../cost-router
+      '@ama/memory':
+        specifier: workspace:*
+        version: link:../../memory
+      '@ama/prompt-architecture':
+        specifier: workspace:*
+        version: link:../../prompt-architecture
+      '@ama/tools':
+        specifier: workspace:*
+        version: link:../../tools
+      '@ama/workflow-engine':
+        specifier: workspace:*
+        version: link:../../workflow-engine
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

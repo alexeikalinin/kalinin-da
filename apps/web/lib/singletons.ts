@@ -11,6 +11,12 @@ import { attachLogSink, createEventBus } from "@ama/events";
 export const OWNER_TENANT_ID = asTenantId("owner");
 export const APPROVER: Actor = { kind: "approver", tenantId: OWNER_TENANT_ID };
 export const AGENT_ACTOR: Actor = { kind: "agent", tenantId: OWNER_TENANT_ID };
+// @ama/learning's recordObservation() requires actor.kind === "reflection"
+// (Learning System §1) — Track A/B are this codebase's first real callers
+// (2026-08-30); the read side (findRelevantLessons via pastExperience) was
+// already wired into every role's prompt by prompt-architecture/assemble.ts
+// from day one, it just never had anything to read.
+export const REFLECTION_ACTOR: Actor = { kind: "reflection", tenantId: OWNER_TENANT_ID };
 
 // Next.js dev mode re-evaluates route modules on every request but keeps
 // the Node process alive — without stashing these on globalThis, each
@@ -57,6 +63,11 @@ function createSingletons(): Singletons {
     "deployment-tool",
     "creative-generation",
     "client-context",
+    "prospect-store",
+    "email-outreach",
+    "google-ads-optimize",
+    "yandex-direct-optimize",
+    "campaign-changes",
   ];
   for (const toolId of toolIds) {
     registry.register(APPROVER, { toolId, displayName: toolId });

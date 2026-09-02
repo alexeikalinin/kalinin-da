@@ -10,7 +10,7 @@ import {
 import { MemoryStore } from "@ama/memory";
 import { ToolRegistry, CredentialStore } from "@ama/tools";
 import { createAnthropicModelCatalog } from "@ama/cost-router";
-import { createPpcAgent, preparePpcInvocation, type PpcModelCaller } from "@ama/agent-ppc";
+import { createPpcAgent, preparePpcInvocation, type PpcSetupModelCaller } from "@ama/agent-ppc";
 import { createAnalyticsAgent, type AnalyticsModelCaller } from "./analytics-agent.ts";
 import { prepareAnalyticsInvocation } from "./dispatch.ts";
 
@@ -52,7 +52,7 @@ test("Analytics reads PPC's archived output through Project Memory", async () =>
     approvalLevel: "output-only",
   });
 
-  const ppcCallModel: PpcModelCaller = async () => ({
+  const ppcCallModel: PpcSetupModelCaller = async () => ({
     result: { budgetSplit: { "google-ads": 0.6, "vk-ads": 0.4 } },
     decisionSummary: "60/40 Google/VK.",
   });
