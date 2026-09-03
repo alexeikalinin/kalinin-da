@@ -36,7 +36,16 @@ export interface BrandInput {
 export interface DesignResult {
   readonly screenshotUrl?: string;
   readonly demoUrl?: string;
-  readonly html: string;
+  // v0 always returns a full Next.js project (page.tsx + layout.tsx +
+  // globals.css + package.json), not standalone HTML — real bug found
+  // 2026-09-03 deploying a self-promo landing page: an earlier version of
+  // this field was named `html` and held only page.tsx's raw JSX/TSX
+  // source, which deployment-tool then wrote out as a literal index.html
+  // file. Vercel tried to serve that TSX source as a static page and the
+  // deployment failed outright. `files` carries every file v0 returned so
+  // deployment-tool (vercel-deploy.ts) can deploy the whole project and
+  // build it with the Next.js framework instead.
+  readonly files: Record<string, string>;
   readonly chatId: string;
 }
 
@@ -86,17 +95,63 @@ export async function generateDesign(input: DesignBrief): Promise<DesignResult> 
   };
 
   const files = result.latestVersion?.files ?? [];
-  // Prefer the actual page entry point over whatever file happens to be
-  // first — v0 usually names it app/page.tsx, but not guaranteed.
-  const page = files.find((f) => /page\.(tsx|jsx)$/.test(f.name)) ?? files[0];
-  if (!page) {
+  if (files.length === 0) {
     throw new Error(`v0 returned no files for chat "${result.id}"`);
   }
+
+  const fileMap = Object.fromEntries(files.map((f) => [f.name, f.content]));
 
   return {
     screenshotUrl: result.latestVersion?.screenshotUrl,
     demoUrl: result.latestVersion?.demoUrl,
-    html: page.content,
+    files: withBoilerplate(fileMap),
     chatId: result.id,
   };
+}
+
+// v0's chat API only returns the files the AI actually wrote for this chat
+// (page.tsx/layout.tsx/globals.css/package.json) — not the fixed boilerplate
+// every v0 Next.js + Tailwind v4 project also needs. Missing this silently:
+// without postcss.config.mjs specifically, Next never runs the Tailwind
+// PostCSS plugin, so the page builds and deploys with NO build error but
+// renders completely unstyled (found 2026-09-03 deploying the self-promo
+// landing page — the shipped CSS had only @font-face rules, zero utility
+// classes). Only fills in files the response didn't already provide, so a
+// future v0 API version that does include them isn't overridden.
+function withBoilerplate(files: Record<string, string>): Record<string, string> {
+  const withDefaults = { ...files };
+  if (!withDefaults["postcss.config.mjs"]) {
+    withDefaults["postcss.config.mjs"] = `const config = {\n  plugins: {\n    "@tailwindcss/postcss": {},\n  },\n};\n\nexport default config;\n`;
+  }
+  if (!withDefaults["next.config.mjs"]) {
+    withDefaults["next.config.mjs"] = `/** @type {import('next').NextConfig} */\nconst nextConfig = {};\n\nexport default nextConfig;\n`;
+  }
+  if (!withDefaults["tsconfig.json"]) {
+    withDefaults["tsconfig.json"] = JSON.stringify(
+      {
+        compilerOptions: {
+          target: "ES2017",
+          lib: ["dom", "dom.iterable", "esnext"],
+          allowJs: true,
+          skipLibCheck: true,
+          strict: true,
+          noEmit: true,
+          esModuleInterop: true,
+          module: "esnext",
+          moduleResolution: "bundler",
+          resolveJsonModule: true,
+          isolatedModules: true,
+          jsx: "preserve",
+          incremental: true,
+          plugins: [{ name: "next" }],
+          paths: { "@/*": ["./*"] },
+        },
+        include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+        exclude: ["node_modules"],
+      },
+      null,
+      2,
+    );
+  }
+  return withDefaults;
 }

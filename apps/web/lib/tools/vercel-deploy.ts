@@ -47,6 +47,29 @@ export async function deployArtifact(artifact: unknown, projectName: string): Pr
   const files = toFileMap(artifact);
   const teamId = process.env.VERCEL_TEAM_ID;
 
+  // A v0-generated Next.js project (v0-design.ts's generateDesign, since
+  // its 2026-09-03 fix) hands back page.tsx/layout.tsx/globals.css/
+  // package.json, not static HTML — deploying that file set with
+  // `framework: null` (Vercel's "static files, serve as-is" mode) makes
+  // Vercel try to serve raw .tsx source as a page and fail the build. A
+  // plain single "index.html" artifact (e.g. realFrontend's raw-HTML
+  // path in real-models.ts) has no package.json and still wants `null`
+  // (static). Detecting by the presence of package.json, rather than
+  // threading a framework flag through every caller, keeps both existing
+  // call sites working unchanged.
+  const framework = "package.json" in files ? "nextjs" : null;
+  // kalinin-da-web's persistent project setting is Root Directory =
+  // "apps/web" (needed for its real git-based deploys of this monorepo).
+  // Passing `projectSettings.rootDirectory: null` in the deployment request
+  // does NOT override that per-deployment (confirmed live 2026-09-03 —
+  // still failed with NOW_SANDBOX_WORKER_ROOTDIR_NOT_EXIST after adding it),
+  // so instead the uploaded files are placed under that same "apps/web/"
+  // prefix to match what the project actually expects. Only applied for a
+  // multi-file (Next.js-shaped) deploy — a single "index.html" artifact
+  // deploys with `framework: null` (static, ignores Root Directory) and
+  // must NOT be prefixed, or it would 404 at the site root.
+  const prefixedFiles = framework === "nextjs" ? Object.fromEntries(Object.entries(files).map(([path, data]) => [`apps/web/${path}`, data])) : files;
+
   const response = await fetch(`${API_BASE}/v13/deployments${teamId ? `?teamId=${teamId}` : ""}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -56,8 +79,8 @@ export async function deployArtifact(artifact: unknown, projectName: string): Pr
       // preview deployment, never straight to production. Promoting it is a
       // human decision, the same principle as every ad-platform tool here
       // creating campaigns paused rather than live.
-      files: Object.entries(files).map(([file, data]) => ({ file, data })),
-      projectSettings: { framework: null },
+      files: Object.entries(prefixedFiles).map(([file, data]) => ({ file, data })),
+      projectSettings: { framework },
     }),
     signal: AbortSignal.timeout(DEPLOY_TIMEOUT_MS),
   });
