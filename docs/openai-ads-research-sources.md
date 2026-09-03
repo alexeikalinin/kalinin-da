@@ -19,6 +19,8 @@
 | New ways to buy ChatGPT ads \| OpenAI | https://openai.com/index/new-ways-to-buy-chatgpt-ads/ | Официальный анонс | 2026-09-03 | Self-serve запуск, CPC-биддинг, снятие порога $50K |
 | A milestone in expanding access to AI \| OpenAI | https://openai.com/index/expanding-access-to-ai-with-chatgpt-ads/ | Официальный анонс | 2026-09-03 | Контекст расширения доступа к рекламной платформе |
 | Our approach to advertising and expanding access \| OpenAI | https://openai.com/index/our-approach-to-advertising-and-expanding-access/ | Официальная позиция компании | 2026-09-03 | Общий подход OpenAI к рекламе в ChatGPT |
+| Ads in ChatGPT \| OpenAI Help Center | https://help.openai.com/en/articles/20001047-ads-in-chatgpt | Официальный Help Center | 2026-09-03 | Потребительская сторона: как выглядит реклама, кому показывается, приватность (прямой fetch вернул 403, содержание восстановлено через независимые вторичные источники, см. ниже) |
+| Ads in ChatGPT: The Basics \| OpenAI Help Center | https://help.openai.com/en/articles/20001207-ads-in-chatgpt-the-basics | Официальный Help Center | 2026-09-03 | Список стран показа (US/Canada/Australia/NZ/UK/Japan/South Korea/Mexico/Brazil), какие планы видят рекламу (Free/Go, не Plus/Pro/Business/Enterprise/Edu), возрастное ограничение 18+, формат карточки, персонализация/приватность |
 
 ## Вторичные источники (независимая журналистика/индустрия)
 
@@ -29,6 +31,7 @@
 | OpenAI opens ChatGPT Ads Manager to all US businesses with CPC bidding — PPC Land | https://ppc.land/openai-opens-chatgpt-ads-manager-to-all-us-businesses-with-cpc-bidding/ | Индустриальное издание | 2026-09-03 | US-only рынок на момент открытия, CPC-биддинг |
 | OpenAI Ads Manager Explained: Hands-On Testing — We Are ROAST | https://weareroast.com/news/openai-ads-manager-explained-hands-on-testing-of-chatgpt-advertising/ | Независимый практический разбор (агентство) | 2026-09-03 | Нет MCC-style мастер-аккаунта; агентства не могут создавать аккаунты за клиента |
 | ChatGPT Ads Manager: What Advertisers Need to Know — WebFX | https://www.webfx.com/blog/ai/chatgpt-ads-manager/ | Индустриальный блог | 2026-09-03 | Общий обзор self-serve платформы |
+| How to advertise on ChatGPT: What you need to know right now — StackAdapt | https://www.stackadapt.com/resources/blog/how-to-advertise-on-chatgpt | Индустриальный блог | 2026-09-03 | Точный формат карточки (headline ≤30 симв., description ≤60 симв., 256×256px), где реклама НЕ показывается (Temporary Chats, logged-out, после генерации изображений, ChatGPT Atlas), уточнение что context_hints — не keyword-таргетинг |
 
 ## Сторонние интеграторы (для Phase 3, помечены как неофициальные/непроверенные)
 
