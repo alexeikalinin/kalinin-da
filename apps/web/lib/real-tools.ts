@@ -41,6 +41,19 @@ import {
   type YandexSearchBiddingStrategy,
 } from "./tools/yandex-direct.ts";
 import { createOrReusePausedCampaign as createOrReuseMetaCampaign, isMetaAdsConfigured } from "./tools/meta-ads.ts";
+import {
+  adjustCampaignBudget as adjustOpenAiAdsCampaignBudget,
+  createOrReusePausedCampaign as createOrReuseOpenAiAdsCampaign,
+  getAdInsights as getOpenAiAdsInsights,
+  isOpenAiAdsConfigured,
+  listCampaigns as listOpenAiAdsCampaigns,
+  sendConversionEvents,
+  setCampaignStatus as setOpenAiAdsCampaignStatus,
+  verifyAdAccountAccess,
+  type OpenAiAdsBiddingType,
+  type OpenAiAdsCampaignTargeting,
+  type OpenAiAdsConversionEvent,
+} from "./tools/openai-ads.ts";
 import { createOrReusePausedCampaign as createOrReuseVkCampaign, isVkAdsConfigured } from "./tools/vk-ads.ts";
 import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
 import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
@@ -195,6 +208,62 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
         const today = new Date().toISOString().slice(0, 10);
         const result = await createOrReuseMetaCampaign(`AMA Auto — ${today} — meta-ads`, metaAdAccountId);
         return result;
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    // OpenAI Ads (ChatGPT Ads) — docs/openai-ads-integration-research.md.
+    // No keyword-driven multi-group builder like google-ads/yandex-direct:
+    // this platform's campaigns target locations/custom_audiences, not
+    // keywords, so there is no equivalent structure for a PPC agent to
+    // fill in yet. This case only ever creates an empty, paused campaign
+    // shell; read/write against an existing campaign lives in the
+    // "openai-ads-optimize" action-dispatch case below, mirroring
+    // "yandex-direct-optimize"'s split from "yandex-direct".
+    case "openai-ads": {
+      const { name, biddingType, lifetimeSpendLimitMicros, targeting, apiKeyEnv } = args as {
+        name: string;
+        biddingType: OpenAiAdsBiddingType;
+        lifetimeSpendLimitMicros: number;
+        targeting?: OpenAiAdsCampaignTargeting;
+        apiKeyEnv?: string;
+      };
+      if (!isOpenAiAdsConfigured(apiKeyEnv)) return "configured"; // graceful degrade, no credentials configured
+      try {
+        return await createOrReuseOpenAiAdsCampaign({ name, biddingType, lifetimeSpendLimitMicros, targeting }, apiKeyEnv);
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "openai-ads-optimize": {
+      const { action, apiKeyEnv, ...rest } = args as { action: string; apiKeyEnv?: string; [key: string]: unknown };
+      if (!isOpenAiAdsConfigured(apiKeyEnv)) return { note: "OpenAI Ads not configured — no change was applied." };
+      try {
+        switch (action) {
+          case "verifyAdAccountAccess":
+            return await verifyAdAccountAccess(apiKeyEnv);
+          case "listCampaigns":
+            return await listOpenAiAdsCampaigns(apiKeyEnv);
+          case "setCampaignStatus": {
+            const { campaignId, status } = rest as { campaignId: string; status: "activate" | "pause" | "archive" };
+            return await setOpenAiAdsCampaignStatus(campaignId, status, apiKeyEnv);
+          }
+          case "adjustCampaignBudget": {
+            const { campaignId, lifetimeSpendLimitMicros } = rest as { campaignId: string; lifetimeSpendLimitMicros: number };
+            return await adjustOpenAiAdsCampaignBudget(campaignId, lifetimeSpendLimitMicros, apiKeyEnv);
+          }
+          case "getAdInsights": {
+            const { adId } = rest as { adId: string };
+            return await getOpenAiAdsInsights(adId, apiKeyEnv);
+          }
+          case "sendConversionEvents": {
+            const { pixelId, events } = rest as { pixelId: string; events: readonly OpenAiAdsConversionEvent[] };
+            await sendConversionEvents(pixelId, events, apiKeyEnv);
+            return { sent: events.length };
+          }
+          default:
+            throw new Error(`openai-ads-optimize: unknown action "${action}"`);
+        }
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }

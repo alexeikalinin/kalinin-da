@@ -67,6 +67,8 @@ function createSingletons(): Singletons {
     "email-outreach",
     "google-ads-optimize",
     "yandex-direct-optimize",
+    "openai-ads",
+    "openai-ads-optimize",
     "campaign-changes",
   ];
   for (const toolId of toolIds) {

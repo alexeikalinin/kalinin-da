@@ -7,16 +7,21 @@ import { getSupabase, getSupabaseOwnerTenantId } from "../supabase.ts";
 // one identity (e.g. the StarMedia agency credential) can serve many
 // client_ad_account rows.
 export interface AccessContext {
-  readonly platform: "google-ads" | "yandex-direct";
-  readonly externalAccountId: string; // Google Ads customerId, or Yandex Direct Client-Login
-  readonly credentialRef: string; // env var name — passed straight into google-oauth.ts/yandex-oauth.ts
+  readonly platform: "google-ads" | "yandex-direct" | "openai-ads";
+  readonly externalAccountId: string; // Google Ads customerId, Yandex Direct Client-Login, or OpenAI Ads account id
+  // env var name — passed straight into google-oauth.ts/yandex-oauth.ts, or
+  // (for 'openai-ads') openai-ads-auth.ts's static API key, not an OAuth pair.
+  readonly credentialRef: string;
   readonly accessMode: "agency_manager" | "direct";
-  readonly managerId: string | null; // Google MCC customer_id when accessMode='agency_manager'; unused for Yandex
+  // Google MCC customer_id when accessMode='agency_manager'; unused for Yandex
+  // and always null for 'openai-ads' (no manager-account concept exists there
+  // — see docs/openai-ads-integration-research.md Phase 2).
+  readonly managerId: string | null;
 }
 
 interface ClientAdAccountRow {
   readonly external_account_id: string;
-  readonly platform: "google-ads" | "yandex-direct";
+  readonly platform: "google-ads" | "yandex-direct" | "openai-ads";
   readonly access_mode: "agency_manager" | "direct";
   readonly manager_id: string | null;
   readonly platform_identity: { readonly credential_ref: string } | null;

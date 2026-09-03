@@ -21,6 +21,18 @@ export async function syncAdStats(
   const supabase = getSupabase();
   const tenantId = getSupabaseOwnerTenantId();
   const access = await resolveAccessContext(clientAdAccountId);
+  if (access.platform === "openai-ads") {
+    // OpenAI Ads' only documented reporting endpoint is GET
+    // /ads/{id}/insights — per-ad, not the per-campaign/per-day report this
+    // function needs (docs/openai-ads-integration-research.md Phase 2's
+    // getAdInsights note). Refusing loudly here (before any query runs)
+    // rather than guessing an aggregation shape OpenAI hasn't documented.
+    throw new Error(
+      "syncAdStats: openai-ads has no documented per-campaign/per-day reporting endpoint yet — " +
+        "only GET /ads/{id}/insights (per-ad) exists. See openai-ads.ts's getAdInsights and " +
+        "docs/openai-ads-integration-research.md Phase 2.",
+    );
+  }
 
   const { data: accountRow, error: accountError } = await supabase
     .from("client_ad_account")
