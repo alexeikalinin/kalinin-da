@@ -86,6 +86,19 @@ interface GaqlSearchResponse {
 // (GOOGLE_ADS_LOGIN_CUSTOMER_ID) to preserve existing PPC-agent behavior —
 // pass an explicit loginCustomerId (or leave it undefined for a direct-access
 // account) via resolveAccessContext() for a real client account.
+// Real bug found 2026-09-03 auditing Медавеню through generic tooling: a
+// hardcoded `LIMIT 50` with no `ORDER BY` silently dropped every one of the
+// account's 17 currently-active campaigns on an account with a longer
+// history (older/removed campaigns sorted ahead of them by whatever default
+// order the API happens to return) — any caller treating this as "the
+// account's campaign list" (budget checks, name-matching for
+// createOrReusePausedCampaign) would have missed 100% of real activity.
+// `googleAds:search` returns up to 10,000 rows per page without an explicit
+// LIMIT, which comfortably covers any agency account size in practice —
+// removing the cap (rather than raising it) is what actually fixes this,
+// since any fixed number reintroduces the same class of bug on a bigger
+// account. `ORDER BY campaign.id` makes the result deterministic across
+// calls instead of depending on undocumented default ordering.
 export async function listCampaigns(
   customerId?: string,
   options: GoogleAdsCallOptions = { loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID },
@@ -94,7 +107,7 @@ export async function listCampaigns(
   const data = (await callGoogleAds(
     resolvedCustomerId,
     "/googleAds:search",
-    { query: "SELECT campaign.id, campaign.name, campaign.status FROM campaign LIMIT 50" },
+    { query: "SELECT campaign.id, campaign.name, campaign.status FROM campaign ORDER BY campaign.id" },
     options,
   )) as GaqlSearchResponse;
   return data.results ?? [];
@@ -164,6 +177,108 @@ export async function listGa4ImportCandidates(
 ): Promise<readonly ConversionAction[]> {
   const all = await listConversionActions(customerId, options);
   return all.filter((ca) => ca.type.startsWith("GOOGLE_ANALYTICS_4") && ca.status === "HIDDEN");
+}
+
+// A genuinely separate path from GA4 import above: a native WEBPAGE
+// conversion action, tracked by Google Ads' own conversion tag (fired
+// directly, e.g. via GTM's "Google Ads Conversion Tracking" tag type —
+// see addGoogleAdsConversionTag in google-tag-manager.ts), not through
+// GA4 at all. Exists because linkToGoogleAds's GA4-import conversions
+// (google-analytics.ts) land HIDDEN and Google Ads rejects any API
+// attempt to flip a GOOGLE_ANALYTICS_4_* action to ENABLED/imported — see
+// the module comment on google-analytics.ts's linkToGoogleAds and the
+// 2026-08-30 finding in this file about conversionActions:mutate
+// rejecting that type outright. A plain WEBPAGE action has no such
+// restriction: creating and enabling it is a normal, fully-API-supported
+// operation.
+export interface CreateConversionActionInput {
+  readonly name: string;
+  readonly category?: string; // default "SUBMIT_LEAD_FORM" — Google Ads' enum for a lead-gen form conversion
+  readonly countingType?: "ONE_PER_CLICK" | "MANY_PER_CLICK"; // default ONE_PER_CLICK — one lead per click, not one per event
+}
+
+export interface CreatedConversionAction {
+  readonly resourceName: string;
+  readonly id: string;
+  // Google Ads' own conversion tag identifiers — what a GTM "Google Ads
+  // Conversion Tracking" tag (or gtag.js directly) needs to actually
+  // report a conversion against this action.
+  readonly conversionId: string;
+  readonly conversionLabel: string;
+}
+
+// Idempotent by name — a repeated call for the same name reuses the
+// existing action instead of creating a duplicate conversion action.
+export async function createConversionAction(
+  input: CreateConversionActionInput,
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<CreatedConversionAction> {
+  const existing = await listConversionActions(customerId, options);
+  const match = existing.find((ca) => ca.name === input.name && ca.type === "WEBPAGE");
+  const resourceName = match
+    ? `customers/${customerId}/conversionActions/${match.id}`
+    : (
+        (await callGoogleAds(
+          customerId,
+          "/conversionActions:mutate",
+          {
+            operations: [
+              {
+                create: {
+                  name: input.name,
+                  type: "WEBPAGE",
+                  category: input.category ?? "SUBMIT_LEAD_FORM",
+                  status: "ENABLED",
+                  countingType: input.countingType ?? "ONE_PER_CLICK",
+                  // includeInConversionsMetric is IMMUTABLE on create
+                  // (confirmed live 2026-09-04 — Google Ads API rejects it
+                  // outright with fieldError IMMUTABLE_FIELD) — Google Ads
+                  // decides this itself at creation time based on category;
+                  // not settable here.
+                },
+              },
+            ],
+          },
+          options,
+        )) as { results: ReadonlyArray<{ resourceName: string }> }
+      ).results[0].resourceName;
+
+  // tag_snippets is only populated when explicitly selected — not part of
+  // listConversionActions' default field set, so this is a second read
+  // rather than folding it into that shared function's fields for every
+  // caller that doesn't need it.
+  const data = (await callGoogleAds(
+    customerId,
+    "/googleAds:search",
+    {
+      query: `SELECT conversion_action.id, conversion_action.tag_snippets
+              FROM conversion_action
+              WHERE conversion_action.resource_name = '${resourceName}'`,
+    },
+    options,
+  )) as {
+    results?: ReadonlyArray<{
+      conversionAction: {
+        id: string;
+        tagSnippets?: ReadonlyArray<{ globalSiteTag?: string; eventSnippet?: string }>;
+      };
+    }>;
+  };
+  const row = data.results?.[0]?.conversionAction;
+  if (!row) throw new Error(`Could not read back conversion action ${resourceName} after creation`);
+
+  // Google's snippets embed the conversion id/label as
+  // `send_to: 'AW-<conversionId>/<conversionLabel>'` inside the
+  // eventSnippet — parsed here rather than asking the caller to scrape it
+  // themselves, since every caller of this function needs exactly this
+  // pair (GTM's Conversion Tracking tag takes them as separate fields).
+  const eventSnippet = row.tagSnippets?.[0]?.eventSnippet ?? "";
+  const sendToMatch = eventSnippet.match(/'send_to':\s*'AW-(\d+)\/([\w-]+)'/);
+  if (!sendToMatch) {
+    throw new Error(`Could not parse conversion id/label from tag snippet for ${resourceName}: ${eventSnippet}`);
+  }
+  return { resourceName, id: row.id, conversionId: sendToMatch[1], conversionLabel: sendToMatch[2] };
 }
 
 // Real finding (2026-08-19): a Google Ads account's cost is reported in
@@ -329,6 +444,126 @@ export async function getCampaignReport(
   }
 
   return [...rows.values()];
+}
+
+export interface SearchTermReportRow {
+  readonly campaignId: string;
+  readonly campaignName: string;
+  readonly adGroupId: string;
+  readonly adGroupName: string;
+  readonly searchTerm: string;
+  readonly impressions: number;
+  readonly clicks: number;
+  readonly costMicros: number;
+  readonly conversions: number;
+}
+
+// Negative-keyword mining and cross-campaign cannibalization both need the
+// actual search terms that triggered a click, not just the bid keywords —
+// missing from this file entirely before this function (found 2026-09-03
+// comparing a generic-tooling audit against .claude/agents/medavenue-analyst.md's
+// hand-written GAQL for the same report). Performance Max campaigns don't
+// populate search_term_view (they need campaign_search_term_insight
+// instead, a separate resource this function does not cover) — callers
+// should expect near-zero rows for PMax campaign IDs.
+export async function getSearchTermsReport(
+  customerId: string,
+  params: { readonly startDate: string; readonly endDate: string },
+  options: GoogleAdsCallOptions = {},
+): Promise<readonly SearchTermReportRow[]> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/googleAds:search",
+    {
+      query: `SELECT campaign.id, campaign.name, ad_group.id, ad_group.name,
+                search_term_view.search_term, metrics.impressions, metrics.clicks,
+                metrics.cost_micros, metrics.conversions
+              FROM search_term_view
+              WHERE segments.date BETWEEN '${params.startDate}' AND '${params.endDate}'`,
+    },
+    options,
+  )) as {
+    results?: ReadonlyArray<{
+      campaign: { id: string; name: string };
+      adGroup: { id: string; name: string };
+      searchTermView: { searchTerm: string };
+      metrics: Record<string, number>;
+    }>;
+  };
+
+  return (data.results ?? []).map((r) => ({
+    campaignId: r.campaign.id,
+    campaignName: r.campaign.name,
+    adGroupId: r.adGroup.id,
+    adGroupName: r.adGroup.name,
+    searchTerm: r.searchTermView.searchTerm,
+    impressions: Number(r.metrics.impressions ?? 0),
+    clicks: Number(r.metrics.clicks ?? 0),
+    costMicros: Number(r.metrics.costMicros ?? 0),
+    conversions: Number(r.metrics.conversions ?? 0),
+  }));
+}
+
+export interface ImpressionShareReportRow {
+  readonly campaignId: string;
+  readonly campaignName: string;
+  readonly searchImpressionShare: number | null;
+  readonly searchBudgetLostImpressionShare: number | null;
+  readonly searchRankLostImpressionShare: number | null;
+}
+
+// The signal that tells "raise the budget" apart from "fix the ad/bid" —
+// budget-lost high means more budget would actually buy more impressions;
+// rank-lost high means it wouldn't (ad rank/quality is the ceiling, not
+// spend). Without this, a campaign that's simply pinned at its daily
+// budget looks identical to one that's losing on quality, and "scale up"
+// becomes a guess instead of a data-backed call — the gap that made a
+// generic-tooling audit (2026-09-03) recommend budget increases a
+// specialized audit correctly flagged as premature. Search-only metric —
+// not populated for Performance Max or Display campaigns.
+export async function getImpressionShareReport(
+  customerId: string,
+  params: { readonly startDate: string; readonly endDate: string },
+  options: GoogleAdsCallOptions = {},
+): Promise<readonly ImpressionShareReportRow[]> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/googleAds:search",
+    {
+      query: `SELECT campaign.id, campaign.name, metrics.search_impression_share,
+                metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share
+              FROM campaign
+              WHERE segments.date BETWEEN '${params.startDate}' AND '${params.endDate}'
+                AND campaign.advertising_channel_type = 'SEARCH'`,
+    },
+    options,
+  )) as {
+    results?: ReadonlyArray<{
+      campaign: { id: string; name: string };
+      metrics: Record<string, number | null>;
+    }>;
+  };
+
+  // Real finding (2026-09-03, running this against a live account for the
+  // first time): Google Ads omits `metrics` entirely on a result row when
+  // every requested metric is unset for that campaign/date range (not just
+  // zero-valued) — roughly half of Медавеню's SEARCH campaigns hit this
+  // (no impression-share data recorded at all, e.g. very low volume or
+  // paused mid-period). `r.metrics.searchImpressionShare` on such a row
+  // threw `TypeError: Cannot read properties of undefined`, silently
+  // aborting the whole report for every campaign, not just the affected
+  // ones. Fixed with `r.metrics ?? {}` — a missing metrics object is
+  // legitimate "no impression-share data for this campaign", not an error.
+  return (data.results ?? []).map((r) => {
+    const metrics = r.metrics ?? {};
+    return {
+      campaignId: r.campaign.id,
+      campaignName: r.campaign.name,
+      searchImpressionShare: metrics.searchImpressionShare ?? null,
+      searchBudgetLostImpressionShare: metrics.searchBudgetLostImpressionShare ?? null,
+      searchRankLostImpressionShare: metrics.searchRankLostImpressionShare ?? null,
+    };
+  });
 }
 
 // Creates a real CampaignBudget + Campaign, PAUSED, SEARCH channel type, no

@@ -40,7 +40,11 @@ function toFileMap(artifact: unknown): Record<string, string> {
   );
 }
 
-export async function deployArtifact(artifact: unknown, projectName: string): Promise<DeploymentResult> {
+export async function deployArtifact(
+  artifact: unknown,
+  projectName: string,
+  env?: Record<string, string>,
+): Promise<DeploymentResult> {
   const token = process.env.VERCEL_DEPLOY_TOKEN;
   if (!token) throw new Error("VERCEL_DEPLOY_TOKEN is not set");
 
@@ -81,6 +85,12 @@ export async function deployArtifact(artifact: unknown, projectName: string): Pr
       // creating campaigns paused rather than live.
       files: Object.entries(prefixedFiles).map(([file, data]) => ({ file, data })),
       projectSettings: { framework },
+      // One-off deployment-scoped env vars (not persisted to the project) —
+      // this API-uploaded deploy has no git commit/branch attached, so it
+      // doesn't inherit the project's configured Preview env vars the way a
+      // git-triggered deploy would (confirmed live 2026-09-04: a route
+      // reading process.env.SUPABASE_URL 500'd until passed this way).
+      ...(env ? { env } : {}),
     }),
     signal: AbortSignal.timeout(DEPLOY_TIMEOUT_MS),
   });

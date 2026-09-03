@@ -104,6 +104,35 @@ export async function provisionContainerWithGa4Tag(
   return { containerPath: container.path, publicId: container.publicId, reused: false };
 }
 
+// Shared by addGa4EventTag/addGoogleAdsConversionTag below — both need the
+// same "did dataLayer.push({event: eventName, ...}) happen" trigger, and a
+// second event tag reusing the same eventName should fire off the one
+// trigger already created for the first, not a duplicate.
+async function findOrCreateCustomEventTrigger(workspacePath: string, eventName: string): Promise<string> {
+  const existingTriggers = (await callGtm(`/${workspacePath}/triggers`, "GET")) as {
+    trigger?: ReadonlyArray<GtmTrigger & { path?: string }>;
+  };
+  const triggerName = `Custom Event — ${eventName}`;
+  const existing = existingTriggers.trigger?.find((t) => t.name === triggerName)?.triggerId;
+  if (existing) return existing;
+
+  const trigger = (await callGtm(`/${workspacePath}/triggers`, "POST", {
+    name: triggerName,
+    type: "customEvent",
+    customEventFilter: [
+      { type: "equals", parameter: [{ type: "template", key: "arg0", value: "{{_event}}" }, { type: "template", key: "arg1", value: eventName }] },
+    ],
+  })) as GtmTrigger & { triggerId: string };
+  return trigger.triggerId;
+}
+
+async function publishNewVersion(workspacePath: string, name: string): Promise<void> {
+  const version = (await callGtm(`/${workspacePath}:create_version`, "POST", { name })) as {
+    containerVersion: { path: string };
+  };
+  await callGtm(`/${version.containerVersion.path}:publish`, "POST", {});
+}
+
 // Wires a form/button dataLayer.push({event: eventName, ...}) through to a
 // real GA4 event: a Custom Event trigger matching eventName, plus a GA4
 // Event tag (using the same measurementId as the page's GA4 Configuration
@@ -117,23 +146,7 @@ export async function addGa4EventTag(containerPath: string, eventName: string, m
     workspace: ReadonlyArray<{ path: string }>;
   };
   const workspacePath = workspaces.workspace[0].path;
-
-  const existingTriggers = (await callGtm(`/${workspacePath}/triggers`, "GET")) as {
-    trigger?: ReadonlyArray<GtmTrigger & { path?: string }>;
-  };
-  const triggerName = `Custom Event — ${eventName}`;
-  let triggerId = existingTriggers.trigger?.find((t) => t.name === triggerName)?.triggerId;
-
-  if (!triggerId) {
-    const trigger = (await callGtm(`/${workspacePath}/triggers`, "POST", {
-      name: triggerName,
-      type: "customEvent",
-      customEventFilter: [
-        { type: "equals", parameter: [{ type: "template", key: "arg0", value: "{{_event}}" }, { type: "template", key: "arg1", value: eventName }] },
-      ],
-    })) as GtmTrigger & { triggerId: string };
-    triggerId = trigger.triggerId;
-  }
+  const triggerId = await findOrCreateCustomEventTrigger(workspacePath, eventName);
 
   const existingTags = (await callGtm(`/${workspacePath}/tags`, "GET")) as { tag?: ReadonlyArray<GtmTag & { name: string }> };
   const tagName = `GA4 Event — ${eventName}`;
@@ -151,10 +164,47 @@ export async function addGa4EventTag(containerPath: string, eventName: string, m
     });
   }
 
-  const version = (await callGtm(`/${workspacePath}:create_version`, "POST", {
-    name: `Add GA4 event tag — ${eventName}`,
-  })) as { containerVersion: { path: string } };
-  await callGtm(`/${version.containerVersion.path}:publish`, "POST", {});
+  await publishNewVersion(workspacePath, `Add GA4 event tag — ${eventName}`);
+}
+
+// The Google Ads side of the same dataLayer.push({event: eventName, ...})
+// — a "Google Ads Conversion Tracking" tag (GTM's built-in "awct" type)
+// firing on the same Custom Event trigger as addGa4EventTag, reporting
+// against a native Google Ads conversion action (created via
+// google-ads.ts's createConversionAction, which returns exactly the
+// conversionId/conversionLabel pair this tag needs). Independent of GA4 —
+// this is Google Ads' own conversion tag, not an import from GA4's key
+// events, so it isn't affected by the GA4-import HIDDEN-status limitation
+// documented on createConversionAction.
+export async function addGoogleAdsConversionTag(
+  containerPath: string,
+  eventName: string,
+  conversionId: string,
+  conversionLabel: string,
+): Promise<void> {
+  const workspaces = (await callGtm(`/${containerPath}/workspaces`, "GET")) as {
+    workspace: ReadonlyArray<{ path: string }>;
+  };
+  const workspacePath = workspaces.workspace[0].path;
+  const triggerId = await findOrCreateCustomEventTrigger(workspacePath, eventName);
+
+  const existingTags = (await callGtm(`/${workspacePath}/tags`, "GET")) as { tag?: ReadonlyArray<GtmTag & { name: string }> };
+  const tagName = `Google Ads Conversion — ${eventName}`;
+  const alreadyTagged = existingTags.tag?.some((t) => t.name === tagName);
+
+  if (!alreadyTagged) {
+    await callGtm(`/${workspacePath}/tags`, "POST", {
+      name: tagName,
+      type: "awct", // Google's built-in Google Ads Conversion Tracking tag type
+      parameter: [
+        { type: "template", key: "conversionId", value: conversionId },
+        { type: "template", key: "conversionLabel", value: conversionLabel },
+      ],
+      firingTriggerId: [triggerId],
+    });
+  }
+
+  await publishNewVersion(workspacePath, `Add Google Ads conversion tag — ${eventName}`);
 }
 
 // ---------------------------------------------------------------------
