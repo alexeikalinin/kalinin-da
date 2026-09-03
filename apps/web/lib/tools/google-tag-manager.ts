@@ -104,6 +104,59 @@ export async function provisionContainerWithGa4Tag(
   return { containerPath: container.path, publicId: container.publicId, reused: false };
 }
 
+// Wires a form/button dataLayer.push({event: eventName, ...}) through to a
+// real GA4 event: a Custom Event trigger matching eventName, plus a GA4
+// Event tag (using the same measurementId as the page's GA4 Configuration
+// tag) that fires on it. provisionContainerWithGa4Tag only sets up the
+// page-view side (a GA4 Configuration tag on All Pages) — without this,
+// a client-side-only form submit (no page navigation for a page-view tag
+// to catch) never reaches GA4 at all. Idempotent by trigger/tag name, same
+// convention as provisionContainerWithGa4Tag itself.
+export async function addGa4EventTag(containerPath: string, eventName: string, measurementId: string): Promise<void> {
+  const workspaces = (await callGtm(`/${containerPath}/workspaces`, "GET")) as {
+    workspace: ReadonlyArray<{ path: string }>;
+  };
+  const workspacePath = workspaces.workspace[0].path;
+
+  const existingTriggers = (await callGtm(`/${workspacePath}/triggers`, "GET")) as {
+    trigger?: ReadonlyArray<GtmTrigger & { path?: string }>;
+  };
+  const triggerName = `Custom Event — ${eventName}`;
+  let triggerId = existingTriggers.trigger?.find((t) => t.name === triggerName)?.triggerId;
+
+  if (!triggerId) {
+    const trigger = (await callGtm(`/${workspacePath}/triggers`, "POST", {
+      name: triggerName,
+      type: "customEvent",
+      customEventFilter: [
+        { type: "equals", parameter: [{ type: "template", key: "arg0", value: "{{_event}}" }, { type: "template", key: "arg1", value: eventName }] },
+      ],
+    })) as GtmTrigger & { triggerId: string };
+    triggerId = trigger.triggerId;
+  }
+
+  const existingTags = (await callGtm(`/${workspacePath}/tags`, "GET")) as { tag?: ReadonlyArray<GtmTag & { name: string }> };
+  const tagName = `GA4 Event — ${eventName}`;
+  const alreadyTagged = existingTags.tag?.some((t) => t.name === tagName);
+
+  if (!alreadyTagged) {
+    await callGtm(`/${workspacePath}/tags`, "POST", {
+      name: tagName,
+      type: "gaawe", // Google's built-in GA4 Event tag type
+      parameter: [
+        { type: "template", key: "measurementIdOverride", value: measurementId },
+        { type: "template", key: "eventName", value: eventName },
+      ],
+      firingTriggerId: [triggerId],
+    });
+  }
+
+  const version = (await callGtm(`/${workspacePath}:create_version`, "POST", {
+    name: `Add GA4 event tag — ${eventName}`,
+  })) as { containerVersion: { path: string } };
+  await callGtm(`/${version.containerVersion.path}:publish`, "POST", {});
+}
+
 // ---------------------------------------------------------------------
 // Conversion-audit read tools (see ~/.claude/skills/conversion-audit.md
 // and 2026-08-18's real Медавеню audit) — read-only, never mutate.
