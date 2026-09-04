@@ -59,6 +59,7 @@ import { createGoal, provisionCounter } from "./tools/yandex-metrika.ts";
 import { isDataLensConfigured, provisionWorkbook } from "./tools/datalens.ts";
 import { generateCreativeAssets, isCreativeGenerationConfigured } from "./tools/creative-generation.ts";
 import { getClientContext, isSupabaseConfigured } from "./tools/client-context.ts";
+import { getSeoInsights, isSeoServiceConfigured } from "./tools/seo-service.ts";
 import {
   addDecisionMaker,
   addResearchFacts,
@@ -505,6 +506,23 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
           workbookId: workbook.workbookId,
           note: "Workbook provisioned — datasets/charts/dashboards are not built yet, this is the container only.",
         };
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
+    case "seo-service": {
+      // SEO Agent (packages/agents/seo) only ever calls this with { url } —
+      // it has no client_ad_account to resolve a customerId from at this
+      // point, so this falls back to the agency's own Google Ads sandbox,
+      // same convention google-ads.ts's own functions use when no
+      // customerId is supplied.
+      const { url, googleAdsCustomerId } = args as { url: string; googleAdsCustomerId?: string };
+      const customerId = googleAdsCustomerId ?? process.env.GOOGLE_ADS_CUSTOMER_ID;
+      if (!isSeoServiceConfigured() || !customerId) {
+        return { note: "seo-service: Google Ads not configured — no keyword data available." };
+      }
+      try {
+        return await getSeoInsights(url, customerId, {}, { loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID });
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }

@@ -135,9 +135,19 @@ export const realResearch: ResearchModelCaller = async (prompt, modelId, siteCon
   return { findings: { summary: out.summary, facts: out.facts }, decisionSummary: out.decisionSummary };
 };
 
-export const realSeo: SeoModelCaller = async (prompt, modelId) => {
+export const realSeo: SeoModelCaller = async (prompt, modelId, keywordData) => {
+  // Was `(prompt, modelId)` — the third param (seo-service's real keyword
+  // data, real-tools.ts) was declared on SeoModelCaller but never actually
+  // read, same "tool output fetched then discarded" bug realResearch was
+  // fixed for on 2026-08-27 (see project_agent_framework_maturity memory) —
+  // this role just hadn't been touched by that pass since it wasn't
+  // exercised against a real project yet.
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: [...prompt.clientFacts, `Реальные данные по ключевым словам сайта (объём поиска, конкуренция, ставки):\n${JSON.stringify(keywordData)}`],
+  };
   const out = await callClaudeForJson<{ targetKeywords: string[]; recommendations: string[]; decisionSummary: string }>(
-    prompt,
+    groundedPrompt,
     modelId,
     {
       name: "submit_seo_recommendations",

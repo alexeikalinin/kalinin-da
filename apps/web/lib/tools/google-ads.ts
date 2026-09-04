@@ -314,6 +314,34 @@ export interface KeywordIdea {
 // requires at least a keyword or URL seed, geo/language narrow the
 // estimate to the actual target market (same geoTargetConstants/
 // languageConstants resource-name shape as addGeoAndLanguageTargeting).
+interface RawKeywordIdeasResponse {
+  results?: ReadonlyArray<{
+    text?: string;
+    keywordIdeaMetrics?: {
+      avgMonthlySearches?: string;
+      competition?: string;
+      lowTopOfPageBidMicros?: string;
+      highTopOfPageBidMicros?: string;
+    };
+  }>;
+}
+
+function parseKeywordIdeas(data: RawKeywordIdeasResponse): readonly KeywordIdea[] {
+  return (data.results ?? [])
+    .filter((r): r is typeof r & { text: string } => Boolean(r.text))
+    .map((r) => ({
+      text: r.text,
+      avgMonthlySearches: r.keywordIdeaMetrics?.avgMonthlySearches ? Number(r.keywordIdeaMetrics.avgMonthlySearches) : undefined,
+      competition: r.keywordIdeaMetrics?.competition,
+      lowTopOfPageBidMicros: r.keywordIdeaMetrics?.lowTopOfPageBidMicros
+        ? Number(r.keywordIdeaMetrics.lowTopOfPageBidMicros)
+        : undefined,
+      highTopOfPageBidMicros: r.keywordIdeaMetrics?.highTopOfPageBidMicros
+        ? Number(r.keywordIdeaMetrics.highTopOfPageBidMicros)
+        : undefined,
+    }));
+}
+
 export async function getKeywordIdeas(
   seedKeywords: readonly string[],
   customerId: string,
@@ -331,30 +359,38 @@ export async function getKeywordIdeas(
       keywordPlanNetwork: "GOOGLE_SEARCH",
     },
     options,
-  )) as {
-    results?: ReadonlyArray<{
-      text?: string;
-      keywordIdeaMetrics?: {
-        avgMonthlySearches?: string;
-        competition?: string;
-        lowTopOfPageBidMicros?: string;
-        highTopOfPageBidMicros?: string;
-      };
-    }>;
-  };
-  return (data.results ?? [])
-    .filter((r): r is typeof r & { text: string } => Boolean(r.text))
-    .map((r) => ({
-      text: r.text,
-      avgMonthlySearches: r.keywordIdeaMetrics?.avgMonthlySearches ? Number(r.keywordIdeaMetrics.avgMonthlySearches) : undefined,
-      competition: r.keywordIdeaMetrics?.competition,
-      lowTopOfPageBidMicros: r.keywordIdeaMetrics?.lowTopOfPageBidMicros
-        ? Number(r.keywordIdeaMetrics.lowTopOfPageBidMicros)
-        : undefined,
-      highTopOfPageBidMicros: r.keywordIdeaMetrics?.highTopOfPageBidMicros
-        ? Number(r.keywordIdeaMetrics.highTopOfPageBidMicros)
-        : undefined,
-    }));
+  )) as RawKeywordIdeasResponse;
+  return parseKeywordIdeas(data);
+}
+
+// Same RPC as getKeywordIdeas, but seeded from a URL instead of literal
+// keywords — Google's GenerateKeywordIdeas supports `urlSeed` as an
+// alternative to `keywordSeed` (it crawls the page and suggests keywords
+// it's actually relevant for). Added for the SEO agent (seo-service tool,
+// see apps/web/lib/tools/seo-service.ts): that role only ever has a site
+// URL, not a hand-picked seed list, at the point it needs keyword/search-
+// volume data — mirrors what a real SEO tool's "keywords this page could
+// rank for" report does, using infrastructure (Google Ads Keyword Planner)
+// this codebase already has live credentials for, rather than waiting on
+// a paid SEO vendor decision (docs/07-planning/backlog.md #25).
+export async function getKeywordIdeasFromUrl(
+  url: string,
+  customerId: string,
+  params: { readonly geoTargetConstants?: readonly string[]; readonly languageConstant?: string } = {},
+  options: GoogleAdsCallOptions = {},
+): Promise<readonly KeywordIdea[]> {
+  const data = (await callGoogleAds(
+    customerId,
+    ":generateKeywordIdeas",
+    {
+      urlSeed: { url },
+      geoTargetConstants: params.geoTargetConstants,
+      language: params.languageConstant,
+      keywordPlanNetwork: "GOOGLE_SEARCH",
+    },
+    options,
+  )) as RawKeywordIdeasResponse;
+  return parseKeywordIdeas(data);
 }
 
 export interface CampaignReportRow {

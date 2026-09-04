@@ -353,7 +353,7 @@ export async function runNode(
         store, registry, credentials, catalog,
         template: { roleId: c.roleId, version: 1, purpose: "SEO", responsibility: "SEO only" },
         context: c, taskDescription: "Сформировать SEO-рекомендации.", clientFactKeys: [],
-        siteUrl: record.input.siteUrl, complexity: "standard", invokeTool: async () => ({}),
+        siteUrl: record.input.siteUrl, complexity: "standard", invokeTool: realToolInvoker,
       });
       return createSeoAgent(USE_REAL_MODELS ? real.realSeo : fakeSeo).invoke(agentInput);
     }

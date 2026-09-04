@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { buildMultiGroupSearchCampaign, buildPausedSearchCampaign, getKeywordIdeas, listGa4ImportCandidates } from "./google-ads.ts";
+import { buildMultiGroupSearchCampaign, buildPausedSearchCampaign, getKeywordIdeas, getKeywordIdeasFromUrl, listGa4ImportCandidates } from "./google-ads.ts";
 
 // 2026-08-30 — the app-level real-* tool files had zero test coverage
 // before this (see project_agent_framework_maturity memory's "no
@@ -217,6 +217,23 @@ test("getKeywordIdeas parses real search volume and bid ranges, and skips ideas 
 
   const call = calls.find((c) => c.url.includes(":generateKeywordIdeas"))!;
   assert.equal(call.url.includes("customers/123:generateKeywordIdeas"), true);
+});
+
+test("getKeywordIdeasFromUrl sends urlSeed (not keywordSeed) and parses the same shape", async () => {
+  respond = (url, body) => {
+    if (url.includes(":generateKeywordIdeas")) {
+      assert.deepEqual((body as { urlSeed?: unknown }).urlSeed, { url: "https://example.com" });
+      assert.equal("keywordSeed" in (body as object), false);
+      return { results: [{ text: "example keyword", keywordIdeaMetrics: { avgMonthlySearches: "300", competition: "LOW" } }] };
+    }
+    throw new Error(`unexpected URL in test: ${url}`);
+  };
+
+  const ideas = await getKeywordIdeasFromUrl("https://example.com", "123");
+
+  assert.deepEqual(ideas, [
+    { text: "example keyword", avgMonthlySearches: 300, competition: "LOW", lowTopOfPageBidMicros: undefined, highTopOfPageBidMicros: undefined },
+  ]);
 });
 
 test("rejects ad copy below Google's minimum (3 headlines, 2 descriptions) with a clear error", async () => {
