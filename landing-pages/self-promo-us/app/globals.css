@@ -4,25 +4,29 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(0.985 0.012 170);
-  --foreground: oklch(0.16 0.035 185);
-  --card: oklch(0.99 0.008 170);
-  --card-foreground: oklch(0.16 0.035 185);
-  --popover: oklch(0.99 0.008 170);
-  --popover-foreground: oklch(0.16 0.035 185);
-  --primary: oklch(0.23 0.055 185);
-  --primary-foreground: oklch(0.98 0.01 170);
-  --secondary: oklch(0.945 0.022 170);
-  --secondary-foreground: oklch(0.23 0.055 185);
-  --muted: oklch(0.945 0.022 170);
-  --muted-foreground: oklch(0.48 0.045 185);
-  --accent: oklch(0.77 0.14 160);
-  --accent-foreground: oklch(0.18 0.055 175);
+  /* Dark-forward "growth signal" palette — near-black canvas, warm paper
+     text, one high-chroma lime accent used sparingly (buttons, numerals,
+     the marquee dot). Replaces the previous generic teal/mint SaaS
+     palette. */
+  --background: oklch(0.16 0.006 285);
+  --foreground: oklch(0.96 0.008 90);
+  --card: oklch(0.2 0.008 285);
+  --card-foreground: oklch(0.96 0.008 90);
+  --popover: oklch(0.2 0.008 285);
+  --popover-foreground: oklch(0.96 0.008 90);
+  --primary: oklch(0.96 0.008 90);
+  --primary-foreground: oklch(0.16 0.006 285);
+  --secondary: oklch(0.23 0.008 285);
+  --secondary-foreground: oklch(0.96 0.008 90);
+  --muted: oklch(0.23 0.008 285);
+  --muted-foreground: oklch(0.68 0.015 90);
+  --accent: oklch(0.87 0.21 128);
+  --accent-foreground: oklch(0.18 0.03 128);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.577 0.245 27.325);
-  --border: oklch(0.86 0.035 170);
-  --input: oklch(0.86 0.035 170);
-  --ring: oklch(0.55 0.09 165);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.87 0.21 128 / 50%);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -113,6 +117,36 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* Dot-grid canvas texture + hero glow — pure CSS, no images/JS deps. */
+.hero-glow::before {
+  content: '';
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 640px;
+  background: radial-gradient(60% 60% at 50% 0%, oklch(0.87 0.21 128 / 18%), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 22s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee {
+    animation: none;
+  }
 }
 
 @layer base {

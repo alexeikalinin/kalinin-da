@@ -71,7 +71,7 @@ export function ContactForm() {
           name="name"
           type="text"
           required
-          className="border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none focus:border-accent-foreground"
+          className="border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none focus:border-accent"
         />
       </div>
       <div className="flex flex-col gap-1.5">
@@ -83,7 +83,7 @@ export function ContactForm() {
           name="email"
           type="email"
           required
-          className="border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none focus:border-accent-foreground"
+          className="border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none focus:border-accent"
         />
       </div>
       <div className="flex flex-col gap-1.5">
@@ -95,7 +95,7 @@ export function ContactForm() {
           name="message"
           rows={3}
           required
-          className="resize-none border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none focus:border-accent-foreground"
+          className="resize-none border border-border bg-background px-3.5 py-2.5 text-sm text-foreground outline-none focus:border-accent"
         />
       </div>
       <button
