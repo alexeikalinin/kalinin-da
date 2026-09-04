@@ -115,3 +115,39 @@ test("findings are written to Task Memory, ready to be archived into Project Mem
   assert.equal(writes[0]?.[0], "task");
   assert.equal(writes[0]?.[1], "findings");
 });
+
+test("candidateKeywords roundtrips through findings/memory write like summary/facts", async () => {
+  const writes: Array<[string, string, unknown]> = [];
+  const callModel: ResearchModelCaller = async () => ({
+    findings: {
+      summary: "OK",
+      facts: [],
+      candidateKeywords: ["купить окна пвх минск", "цена окон пвх"],
+    },
+    decisionSummary: "OK",
+  });
+
+  const agent = createResearchAgent(callModel);
+  const output = await agent.invoke({
+    task: {
+      context: context(),
+      payload: { prompt: emptyPrompt, modelId: "x", siteUrl: "https://client.example", searchQuery: "q" },
+    },
+    memory: {
+      read: async () => undefined,
+      write: async (level, key, value) => {
+        writes.push([level, key, value]);
+      },
+    },
+    tools: { invoke: async () => "ok" },
+  });
+
+  assert.equal(output.status, "success");
+  if (output.status === "success") {
+    assert.deepEqual(output.result.candidateKeywords, ["купить окна пвх минск", "цена окон пвх"]);
+  }
+  assert.deepEqual((writes[0]?.[2] as { candidateKeywords?: string[] })?.candidateKeywords, [
+    "купить окна пвх минск",
+    "цена окон пвх",
+  ]);
+});

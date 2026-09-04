@@ -7,7 +7,17 @@ import {
   asTenantId,
   createInvocationContext,
 } from "@ama/agent-framework";
-import { createPpcAgent, type PpcApplyResult, type PpcRecommendModelCaller, type PpcRecommendResult, type PpcSetupModelCaller, type PpcVerifyResult } from "./ppc-agent.ts";
+import {
+  computeDemandForecast,
+  createPpcAgent,
+  type PpcApplyResult,
+  type PpcRecommendModelCaller,
+  type PpcRecommendResult,
+  type PpcSetupModelCaller,
+  type PpcSetupResult,
+  type PpcTrendAlertsResult,
+  type PpcVerifyResult,
+} from "./ppc-agent.ts";
 
 function context() {
   return createInvocationContext({
@@ -66,6 +76,138 @@ test("a successful call configures every requested channel and records the decis
   if (output.status === "success") {
     assert.match(output.decisions[0]?.summary ?? "", /60\/40/);
   }
+});
+
+// 2026-09-03 — real search-volume grounding before the model decides
+// keywords/ad copy.
+
+test("keyword-volume is called before the model when a dependency's Project Memory has candidateKeywords", async () => {
+  const calls: Array<{ toolId: string; args: unknown }> = [];
+  let modelSawVolumeData: unknown;
+
+  const callModel: PpcSetupModelCaller = async (_prompt, _modelId, volumeData) => {
+    modelSawVolumeData = volumeData;
+    return {
+      result: { budgetSplit: { "google-ads": 1 } },
+      decisionSummary: "Бюджет — в Google Ads.",
+    };
+  };
+
+  const agent = createPpcAgent(callModel);
+  const output = await agent.invoke({
+    task: {
+      context: context(),
+      payload: {
+        prompt: emptyPrompt,
+        modelId: "x",
+        channels: ["google-ads"],
+        siteUrl: "https://example.com",
+        projectContextKeys: ["research-task:findings"],
+      },
+    },
+    memory: {
+      read: async (_level, key) => (key === "research-task:findings" ? { candidateKeywords: ["купить окна пвх"] } : undefined),
+      write: async () => {},
+    },
+    tools: {
+      invoke: async (toolId, args) => {
+        calls.push({ toolId, args });
+        if (toolId === "keyword-volume") return { google: [{ text: "купить окна пвх", avgMonthlySearches: 1000 }] };
+        return "ok";
+      },
+    },
+  });
+
+  assert.equal(output.status, "success");
+  const volumeCallIndex = calls.findIndex((c) => c.toolId === "keyword-volume");
+  const channelCallIndex = calls.findIndex((c) => c.toolId === "google-ads");
+  assert.ok(volumeCallIndex >= 0, "keyword-volume must be called");
+  assert.ok(volumeCallIndex < channelCallIndex, "keyword-volume must be called before the channel tool");
+  assert.deepEqual((calls[volumeCallIndex]?.args as { seedKeywords: string[] }).seedKeywords, ["купить окна пвх"]);
+  assert.deepEqual(modelSawVolumeData, { google: [{ text: "купить окна пвх", avgMonthlySearches: 1000 }] });
+});
+
+test("keyword-volume is NOT called when no dependency provides candidateKeywords", async () => {
+  const calls: string[] = [];
+  const callModel: PpcSetupModelCaller = async () => ({
+    result: { budgetSplit: { "google-ads": 1 } },
+    decisionSummary: "OK",
+  });
+
+  const agent = createPpcAgent(callModel);
+  await agent.invoke({
+    task: {
+      context: context(),
+      payload: { prompt: emptyPrompt, modelId: "x", channels: ["google-ads"], siteUrl: "https://example.com" },
+    },
+    memory: { read: async () => undefined, write: async () => {} },
+    tools: { invoke: async (toolId) => { calls.push(toolId); return "ok"; } },
+  });
+
+  assert.ok(!calls.includes("keyword-volume"));
+});
+
+test("a keyword-volume failure fails the setup Task instead of silently proceeding without volume data", async () => {
+  const callModel: PpcSetupModelCaller = async () => {
+    throw new Error("model should not be called — keyword-volume failed first");
+  };
+
+  const agent = createPpcAgent(callModel);
+  const output = await agent.invoke({
+    task: {
+      context: context(),
+      payload: {
+        prompt: emptyPrompt,
+        modelId: "x",
+        channels: ["google-ads"],
+        siteUrl: "https://example.com",
+        projectContextKeys: ["research-task:findings"],
+      },
+    },
+    memory: {
+      read: async (_level, key) => (key === "research-task:findings" ? { candidateKeywords: ["окна пвх"] } : undefined),
+      write: async () => {},
+    },
+    tools: {
+      invoke: async (toolId) => {
+        if (toolId === "keyword-volume") throw new Error("both sources unavailable");
+        return "ok";
+      },
+    },
+  });
+
+  assert.equal(output.status, "failed");
+});
+
+test("computeDemandForecast: deterministic arithmetic from real volume and the model's own CTR/CR estimate", () => {
+  const volumeData = {
+    google: [
+      { text: "купить окна пвх", avgMonthlySearches: 1000 },
+      { text: "цена окон пвх", avgMonthlySearches: 500 },
+    ],
+  };
+  const result: PpcSetupResult = {
+    budgetSplit: { "google-ads": 1 },
+    keywords: { "google-ads": ["купить окна пвх", "цена окон пвх"] },
+    ctrCrEstimates: { "google-ads": { ctrEstimate: 0.05, crEstimate: 0.1 } },
+  };
+
+  const forecast = computeDemandForecast(volumeData, result);
+
+  assert.ok(forecast);
+  const googleAds = forecast?.["google-ads"];
+  assert.equal(googleAds?.expectedImpressions, 1500);
+  assert.equal(googleAds?.expectedClicks, 75); // 1500 * 0.05
+  assert.equal(googleAds?.expectedConversions, 7.5); // 75 * 0.1
+});
+
+test("computeDemandForecast: undefined when there's no real volume data to ground the forecast in", () => {
+  const result: PpcSetupResult = {
+    budgetSplit: { "google-ads": 1 },
+    keywords: { "google-ads": ["купить окна пвх"] },
+    ctrCrEstimates: { "google-ads": { ctrEstimate: 0.05, crEstimate: 0.1 } },
+  };
+  assert.equal(computeDemandForecast(undefined, result), undefined);
 });
 
 test("a failed model call is reported as a failed Task, not thrown", async () => {
@@ -233,4 +375,79 @@ test("verify: reads back fresh data and records actualEffect/afterMetrics", asyn
   if (output.status === "success") {
     assert.match((output.result as PpcVerifyResult).actualEffect, /\+10% conversions/);
   }
+});
+
+test("trend-alerts: proposes a new campaign_changes_log row for each freshly-detected degradation", async () => {
+  const proposed: unknown[] = [];
+  const agent = createPpcAgent(noSetupModel);
+  const output = await agent.invoke({
+    task: {
+      context: context(),
+      payload: { action: "trend-alerts", clientAdAccountId: "acct-1", clientId: "client-1", platform: "google-ads" },
+    },
+    memory: { read: async () => undefined, write: async () => {} },
+    tools: {
+      invoke: async (toolId, args) => {
+        const a = args as { action: string };
+        if (toolId === "campaign-trends" && a.action === "detectSustainedDegradation") {
+          return [
+            { campaignId: "123", campaignName: "Гинеколог", totalIncreasePct: 50, cpaHistory: [10, 15], weekStarts: ["2026-08-24", "2026-08-31"], hypothesis: "H", recommendation: "R" },
+          ];
+        }
+        if (toolId === "campaign-changes" && a.action === "listCampaignChanges") return [];
+        if (toolId === "campaign-changes" && a.action === "proposeCampaignChange") {
+          proposed.push(args);
+          return { id: "change-1" };
+        }
+        throw new Error(`unexpected call ${toolId}/${a.action}`);
+      },
+    },
+  });
+
+  assert.equal(output.status, "success");
+  if (output.status === "success") {
+    const result = output.result as PpcTrendAlertsResult;
+    assert.equal(result.alertsFound, 1);
+    assert.deepEqual(result.changeLogIds, ["change-1"]);
+    assert.equal(result.skippedDuplicates, 0);
+  }
+  assert.equal(proposed.length, 1);
+  assert.equal((proposed[0] as { changeType: string }).changeType, "trend_degradation");
+});
+
+test("trend-alerts: does not re-propose a campaign that already has an open trend_degradation change", async () => {
+  const proposed: unknown[] = [];
+  const agent = createPpcAgent(noSetupModel);
+  const output = await agent.invoke({
+    task: {
+      context: context(),
+      payload: { action: "trend-alerts", clientAdAccountId: "acct-1", clientId: "client-1", platform: "google-ads" },
+    },
+    memory: { read: async () => undefined, write: async () => {} },
+    tools: {
+      invoke: async (toolId, args) => {
+        const a = args as { action: string };
+        if (toolId === "campaign-trends" && a.action === "detectSustainedDegradation") {
+          return [{ campaignId: "123", campaignName: "Гинеколог", totalIncreasePct: 50, cpaHistory: [10, 15], weekStarts: [], hypothesis: "H", recommendation: "R" }];
+        }
+        if (toolId === "campaign-changes" && a.action === "listCampaignChanges") {
+          return [{ campaignId: "123", changeType: "trend_degradation" }];
+        }
+        if (toolId === "campaign-changes" && a.action === "proposeCampaignChange") {
+          proposed.push(args);
+          return { id: "change-1" };
+        }
+        throw new Error(`unexpected call ${toolId}/${a.action}`);
+      },
+    },
+  });
+
+  assert.equal(output.status, "success");
+  if (output.status === "success") {
+    const result = output.result as PpcTrendAlertsResult;
+    assert.equal(result.alertsFound, 1);
+    assert.equal(result.skippedDuplicates, 1);
+    assert.deepEqual(result.changeLogIds, []);
+  }
+  assert.equal(proposed.length, 0);
 });

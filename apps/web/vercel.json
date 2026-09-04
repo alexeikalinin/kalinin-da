@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/sync-ad-stats",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/detect-trend-alerts",
+      "schedule": "0 4 * * 1"
     }
   ]
 }

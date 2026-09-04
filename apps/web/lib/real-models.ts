@@ -115,24 +115,38 @@ export const realResearch: ResearchModelCaller = async (prompt, modelId, siteCon
       `Результаты веб-поиска по рынку/конкурентам:\n${String(searchResults)}`,
     ],
   };
-  const out = await callClaudeForJson<{ summary: string; facts: string[]; decisionSummary: string }>(
-    groundedPrompt,
-    modelId,
-    {
-      name: "submit_findings",
-      description: "Submit structured research findings about the client's site and market.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          summary: { type: "string" },
-          facts: { type: "array", items: { type: "string" } },
-          decisionSummary: { type: "string" },
+  const out = await callClaudeForJson<{
+    summary: string;
+    facts: string[];
+    candidateKeywords?: string[];
+    decisionSummary: string;
+  }>(groundedPrompt, modelId, {
+    name: "submit_findings",
+    description: "Submit structured research findings about the client's site and market.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: { type: "string" },
+        facts: { type: "array", items: { type: "string" } },
+        candidateKeywords: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Realistic search phrases the target audience would type into a search engine to find " +
+            "this kind of business — derived from the real site content/search results above, not " +
+            "invented ad keywords. These become seeds for a real search-volume check (Google Keyword " +
+            "Planner / Yandex Wordstat) before any PPC campaign decision is made — include as many " +
+            "plausible, distinct phrases as the real content actually supports.",
         },
-        required: ["summary", "facts", "decisionSummary"],
+        decisionSummary: { type: "string" },
       },
+      required: ["summary", "facts", "decisionSummary"],
     },
-  );
-  return { findings: { summary: out.summary, facts: out.facts }, decisionSummary: out.decisionSummary };
+  });
+  return {
+    findings: { summary: out.summary, facts: out.facts, candidateKeywords: out.candidateKeywords },
+    decisionSummary: out.decisionSummary,
+  };
 };
 
 export const realSeo: SeoModelCaller = async (prompt, modelId, keywordData) => {
@@ -210,7 +224,38 @@ const CHANNEL_SITELINKS_SCHEMA = {
   },
 };
 
-export const realPpc: PpcSetupModelCaller = async (prompt, modelId) => {
+// Per-channel CTR/CR estimate schema — the model reasons about these from
+// the real volume/competition data folded into clientFacts below; the
+// impressions/clicks/conversions arithmetic itself is never asked of the
+// model (see computeDemandForecast in ppc-agent.ts) — same "don't trust the
+// model to multiply" stance as everywhere else real numbers are involved.
+const CHANNEL_CTR_CR_SCHEMA = {
+  type: "object" as const,
+  additionalProperties: {
+    type: "object" as const,
+    properties: {
+      ctrEstimate: { type: "number" as const, description: "Estimated click-through rate, 0-1." },
+      crEstimate: { type: "number" as const, description: "Estimated click-to-conversion rate, 0-1." },
+    },
+    required: ["ctrEstimate", "crEstimate"],
+  },
+};
+
+export const realPpc: PpcSetupModelCaller = async (prompt, modelId, volumeData) => {
+  // volumeData is real Keyword Planner / Wordstat frequency data, fetched
+  // BEFORE this call by ppc-agent.ts's handleSetup — fold it into
+  // clientFacts so the model picks keywords/ad copy grounded in real
+  // search demand instead of inventing them blind (2026-09-03 fix, same
+  // "tool output before model call" pattern as realResearch above).
+  const groundedPrompt = {
+    ...prompt,
+    clientFacts: volumeData
+      ? [
+          ...prompt.clientFacts,
+          `Реальные данные по частотности поисковых запросов (Google Keyword Planner / Yandex Wordstat):\n${JSON.stringify(volumeData, null, 2)}`,
+        ]
+      : prompt.clientFacts,
+  };
   const out = await callClaudeForJson<{
     budgetSplit: Record<string, number>;
     keywords?: Record<string, string[]>;
@@ -218,16 +263,21 @@ export const realPpc: PpcSetupModelCaller = async (prompt, modelId) => {
     negativeKeywords?: Record<string, string[]>;
     sitelinks?: Record<string, { text: string; finalUrl: string }[]>;
     callouts?: Record<string, string[]>;
+    ctrCrEstimates?: Record<string, { ctrEstimate: number; crEstimate: number }>;
     decisionSummary: string;
-  }>(prompt, modelId, {
+  }>(groundedPrompt, modelId, {
     name: "submit_campaign_plan",
     description:
       "Submit how the ad budget is split across channels (shares summing to ~1). " +
-      "For google-ads specifically, also submit: the search keywords to target; " +
+      "For google-ads specifically, also submit: the search keywords to target — chosen from the " +
+      "real search-volume data provided above when present, not invented; " +
       "Responsive Search Ad copy (at least 3 headlines ≤30 chars each, at least 2 " +
       "descriptions ≤90 chars each — Google Ads rejects an ad outside those bounds); " +
       "negative keywords to exclude irrelevant traffic; optional sitelinks (link text " +
-      "≤25 chars) and callouts (≤25 chars) to strengthen the ad.",
+      "≤25 chars) and callouts (≤25 chars) to strengthen the ad. When real volume data is provided, " +
+      "also submit a per-channel ctrCrEstimates: a realistic estimated CTR and conversion rate (CR) " +
+      "based on the keywords' real search volume/competition — these are inputs to a downstream " +
+      "deterministic impressions/clicks/conversions forecast; do not compute that forecast yourself.",
     inputSchema: {
       type: "object",
       properties: {
@@ -237,6 +287,7 @@ export const realPpc: PpcSetupModelCaller = async (prompt, modelId) => {
         negativeKeywords: CHANNEL_KEYWORDS_SCHEMA,
         sitelinks: CHANNEL_SITELINKS_SCHEMA,
         callouts: CHANNEL_KEYWORDS_SCHEMA,
+        ctrCrEstimates: CHANNEL_CTR_CR_SCHEMA,
         decisionSummary: { type: "string" },
       },
       required: ["budgetSplit", "decisionSummary"],
@@ -250,6 +301,7 @@ export const realPpc: PpcSetupModelCaller = async (prompt, modelId) => {
       negativeKeywords: out.negativeKeywords,
       sitelinks: out.sitelinks,
       callouts: out.callouts,
+      ctrCrEstimates: out.ctrCrEstimates,
     },
     decisionSummary: out.decisionSummary,
   };

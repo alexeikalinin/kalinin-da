@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabase, getSupabaseOwnerTenantId } from "../../../../lib/supabase.ts";
 import { syncAdStats } from "../../../../lib/sync-ad-stats.ts";
+import { syncCampaignStatus } from "../../../../lib/sync-campaign-status.ts";
 
 // Vercel Cron target (see vercel.json) — not runnable end-to-end until a
 // real Vercel deployment exists (Backlog #23), but the code is ready in
@@ -47,8 +48,26 @@ export async function GET(request: Request) {
   const results = await Promise.all(
     (accounts ?? []).map(async (account) => {
       try {
-        const result = await syncAdStats(account.id, { startDate, endDate });
-        return { adAccountId: account.id, platform: account.platform, ok: true, rowsWritten: result.rowsWritten };
+        // Both writes share the same access-resolution/live-API-call path
+        // (see resolveAccessContext) but populate different tables (ad_stat
+        // vs campaign_status) — run them independently so a live-status
+        // read failing (e.g. a transient API hiccup) doesn't also kill the
+        // day's spend/conversion sync, and vice versa.
+        const [statsResult, statusResult] = await Promise.allSettled([
+          syncAdStats(account.id, { startDate, endDate }),
+          syncCampaignStatus(account.id),
+        ]);
+        return {
+          adAccountId: account.id,
+          platform: account.platform,
+          ok: statsResult.status === "fulfilled",
+          rowsWritten: statsResult.status === "fulfilled" ? statsResult.value.rowsWritten : undefined,
+          error: statsResult.status === "rejected" ? String(statsResult.reason) : undefined,
+          statusSync:
+            statusResult.status === "fulfilled"
+              ? { ok: true, rowsWritten: statusResult.value.rowsWritten }
+              : { ok: false, error: String(statusResult.reason) },
+        };
       } catch (syncError) {
         return {
           adAccountId: account.id,

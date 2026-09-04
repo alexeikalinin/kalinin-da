@@ -13,6 +13,13 @@ import type { PromptBlocks } from "@ama/prompt-architecture";
 export interface ResearchFindings {
   readonly summary: string;
   readonly facts: readonly string[];
+  // Realistic search phrases the target audience would type to find this
+  // kind of business — seeds for a downstream real frequency/volume check
+  // (Google Keyword Planner / Yandex Wordstat), not final ad keywords.
+  // Optional: only produced when the model can ground them in the real
+  // site content/search results already fetched above; consumed by the
+  // PPC agent when it depends on this Research task.
+  readonly candidateKeywords?: readonly string[];
 }
 
 export interface ResearchTaskPayload {

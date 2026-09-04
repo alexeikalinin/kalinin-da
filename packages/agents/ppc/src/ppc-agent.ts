@@ -83,6 +83,32 @@ export interface PpcSetupResult {
   readonly negativeKeywords?: Readonly<Record<string, readonly string[]>>;
   readonly sitelinks?: Readonly<Record<string, readonly { readonly text: string; readonly finalUrl: string }[]>>;
   readonly callouts?: Readonly<Record<string, readonly string[]>>;
+  // Model's own CTR/CR estimates per channel, reasoned from the real
+  // volume/competition data folded into its prompt (real-models.ts's
+  // realPpc) — input to computeDemandForecast below, never used directly
+  // as the forecast itself (the model is not trusted to do the
+  // multiplication).
+  readonly ctrCrEstimates?: Readonly<Record<string, { readonly ctrEstimate: number; readonly crEstimate: number }>>;
+  // Deterministic demand forecast, keyed by channel — computed by
+  // computeDemandForecast below from REAL search volume (fetched via the
+  // "keyword-volume" tool before the model call) and the model's own
+  // ctrEstimate/crEstimate. Arithmetic, not model output: expectedClicks =
+  // expectedImpressions × ctrEstimate, expectedConversions = expectedClicks
+  // × crEstimate. Absent when no real volume data was available for a
+  // channel (e.g. this PPC task has no Research dependency in this
+  // Project's graph, or both volume sources were unconfigured/down).
+  readonly demandForecast?: Readonly<
+    Record<
+      string,
+      {
+        readonly expectedImpressions: number;
+        readonly expectedClicks: number;
+        readonly expectedConversions: number;
+        readonly ctrEstimate: number;
+        readonly crEstimate: number;
+      }
+    >
+  >;
 }
 
 export interface ProposedChange {
@@ -112,7 +138,20 @@ export interface PpcVerifyResult {
   readonly afterMetrics: Readonly<Record<string, unknown>>;
 }
 
-export type PpcResult = PpcSetupResult | PpcRecommendResult | PpcApplyResult | PpcVerifyResult;
+// 2026-09-03 — weekly sustained-CPA-degradation detection
+// (docs/03-architecture/campaign-weekly-trends.md), logged into the same
+// campaign_changes_log a human already reviews for "recommend"'s
+// proposals. Deterministic like "apply"/"verify" (no model call): the
+// hypothesis/recommendation text is already computed by
+// apps/web/lib/campaign-trends.ts before this action ever runs.
+export interface PpcTrendAlertsResult {
+  readonly action: "trend-alerts";
+  readonly alertsFound: number;
+  readonly changeLogIds: readonly string[];
+  readonly skippedDuplicates: number; // already-open trend_degradation rows for the same campaign — not re-proposed
+}
+
+export type PpcResult = PpcSetupResult | PpcRecommendResult | PpcApplyResult | PpcVerifyResult | PpcTrendAlertsResult;
 
 export interface PpcSetupPayload {
   // Optional and defaulting to "setup" (not required) so every existing
@@ -145,6 +184,14 @@ export interface PpcSetupPayload {
   // modeled in this codebase yet.
   readonly yandexCampaignType?: "TEXT_CAMPAIGN" | "DYNAMIC_TEXT_CAMPAIGN" | "MOBILE_APP_CAMPAIGN" | "CPM_BANNER_CAMPAIGN" | "SMART_CAMPAIGN";
   readonly yandexCampaignTypeFields?: Record<string, unknown>;
+  // Project Memory keys this task's dependencies wrote to, in the same
+  // form orchestrator.ts already computes for prompt assembly
+  // (relativeProjectMemoryKey) — reused here as a direct memory-read index
+  // (2026-09-03) so handleSetup can pull a dependency's full, unfiltered
+  // structured output (e.g. Research's candidateKeywords) before calling
+  // the model, not just whatever string-only projection assemblePrompt's
+  // readStrings lets through into the prompt text.
+  readonly projectContextKeys?: readonly string[];
 }
 
 export interface PpcRecommendPayload {
@@ -171,14 +218,31 @@ export interface PpcVerifyPayload {
   readonly externalAccountId: string;
 }
 
-export type PpcTaskPayload = PpcSetupPayload | PpcRecommendPayload | PpcApplyPayload | PpcVerifyPayload;
+export interface PpcTrendAlertsPayload {
+  readonly action: "trend-alerts";
+  readonly clientAdAccountId: string; // where alerts get logged (campaign_changes_log)
+  readonly clientId: string; // business client id — what ad_stat/campaign_status are keyed by
+  readonly platform: "google-ads" | "yandex-direct";
+  readonly minWeeks?: number;
+  readonly minTotalIncreasePct?: number;
+  readonly maxDipSteps?: number;
+}
+
+export type PpcTaskPayload = PpcSetupPayload | PpcRecommendPayload | PpcApplyPayload | PpcVerifyPayload | PpcTrendAlertsPayload;
 
 // The actual LLM calls are injected. This package wires the contract
 // together; it does not itself hold API credentials or call a real
 // provider — none exist in this environment. See README.
+// volumeData carries whatever handleSetup's pre-model "keyword-volume" tool
+// call returned (real Google Keyword Planner / Yandex Wordstat frequency
+// for Research's candidateKeywords) — same "tool output before model call"
+// shape as ResearchModelCaller's siteContent/searchResults. undefined when
+// no candidate keywords were available to check (e.g. no upstream Research
+// dependency in this Project's graph).
 export type PpcSetupModelCaller = (
   prompt: PromptBlocks,
   modelId: string,
+  volumeData: unknown,
 ) => Promise<{ readonly result: PpcSetupResult; readonly decisionSummary: string }>;
 
 // campaignData carries whatever the "recommend" handler already pulled via
@@ -199,9 +263,19 @@ export function createPpcAgent(callSetupModel: PpcSetupModelCaller, callRecommen
     responsibility:
       "Только PPC-кампании (создание, рекомендации, применение одобренных изменений, проверка эффекта) — не медиапланирование бюджета (Media Buyer Agent) и не тексты объявлений (Copywriter Agent).",
     completionCriteria:
-      "setup: результат проходит проверку QA. recommend: изменения записаны в campaign_changes_log со status='proposed'. apply: применяется только status='approved', результат залогирован. verify: actual_effect/after_metrics записаны для последующего анализа.",
+      "setup: результат проходит проверку QA. recommend: изменения записаны в campaign_changes_log со status='proposed'. apply: применяется только status='approved', результат залогирован. verify: actual_effect/after_metrics записаны для последующего анализа. trend-alerts: найденные устойчивые деградации записаны в campaign_changes_log со status='proposed', без дублей уже открытых алертов по той же кампании.",
     memoryLevels: ["task", "project", "client_kb", "domain_kb"],
-    toolIds: ["google-ads", "vk-ads", "yandex-direct", "meta-ads", "google-ads-optimize", "yandex-direct-optimize", "client-context", "campaign-changes"],
+    toolIds: [
+      "google-ads",
+      "vk-ads",
+      "yandex-direct",
+      "meta-ads",
+      "google-ads-optimize",
+      "yandex-direct-optimize",
+      "client-context",
+      "campaign-changes",
+      "campaign-trends",
+    ],
 
     async handler(input: AgentInput<PpcTaskPayload>): Promise<AgentOutput<PpcResult>> {
       const payload = input.task.payload;
@@ -219,7 +293,10 @@ export function createPpcAgent(callSetupModel: PpcSetupModelCaller, callRecommen
       if (action === "apply") {
         return handleApply(input, payload as PpcApplyPayload);
       }
-      return handleVerify(input, payload as PpcVerifyPayload);
+      if (action === "verify") {
+        return handleVerify(input, payload as PpcVerifyPayload);
+      }
+      return handleTrendAlerts(input, payload as PpcTrendAlertsPayload);
     },
   });
 }
@@ -229,11 +306,54 @@ async function handleSetup(
   payload: PpcSetupPayload,
   callModel: PpcSetupModelCaller,
 ): Promise<AgentOutput<PpcResult>> {
+  // Real search-volume grounding, fetched BEFORE the model decides
+  // keywords/ad copy (2026-09-03 — closes the gap where getKeywordIdeas was
+  // only ever called after the model had already invented them). Research's
+  // candidateKeywords is read directly off Project Memory (unfiltered,
+  // structured) rather than through assemblePrompt's string-only prompt
+  // text, using the same key list orchestrator.ts already derives from this
+  // task's dependencies.
+  let candidateKeywords: readonly string[] = [];
+  for (const key of payload.projectContextKeys ?? []) {
+    const value = await input.memory.read("project", key);
+    const maybeKeywords = (value as { readonly candidateKeywords?: readonly string[] } | undefined)?.candidateKeywords;
+    if (maybeKeywords?.length) candidateKeywords = maybeKeywords;
+  }
+
+  let volumeData: unknown;
+  const wantsVolume =
+    candidateKeywords.length > 0 &&
+    (payload.channels.includes("google-ads") || payload.channels.includes("yandex-direct"));
+  if (wantsVolume) {
+    try {
+      volumeData = await input.tools.invoke("keyword-volume", {
+        seedKeywords: candidateKeywords,
+        channels: payload.channels,
+        googleAdsCustomerId: payload.googleAdsCustomerId,
+        geoTargetConstants: payload.geoTargetConstants,
+        languageConstants: payload.languageConstants,
+        regionIds: payload.regionIds,
+      });
+    } catch (error) {
+      // Deliberately NOT caught-and-degraded to "proceed without volume
+      // data" — that would silently reintroduce the exact bug this feature
+      // closes (model inventing keywords blind). The Owner's explicit call
+      // (2026-09-03): fail loudly here; the "keyword-volume" tool case
+      // itself already retries each source before it ever throws.
+      return { status: "failed", error: error as AgentError };
+    }
+  }
+
   let outcome: Awaited<ReturnType<PpcSetupModelCaller>>;
   try {
-    outcome = await callModel(payload.prompt, payload.modelId);
+    outcome = await callModel(payload.prompt, payload.modelId, volumeData);
   } catch (error) {
     return { status: "failed", error: { code: "MODEL_CALL_FAILED", message: String(error), retryable: true } };
+  }
+
+  const demandForecast = computeDemandForecast(volumeData, outcome.result);
+  if (demandForecast) {
+    outcome = { ...outcome, result: { ...outcome.result, demandForecast } };
   }
 
   for (const channel of payload.channels) {
@@ -269,6 +389,67 @@ async function handleSetup(
   return { status: "success", result: outcome.result, decisions: [{ summary: outcome.decisionSummary }] };
 }
 
+// Shape of the "keyword-volume" tool's return value, duck-typed rather
+// than imported — packages/agents/ppc can't depend on apps/web's tool
+// modules, same "own plain shape, real-tools.ts's caller matches it"
+// convention PpcYandexBiddingStrategy documents above.
+interface KeywordVolumeGoogleIdea {
+  readonly text: string;
+  readonly avgMonthlySearches?: number;
+}
+interface KeywordVolumeYandexSeed {
+  readonly seed: string;
+  readonly results?: readonly { readonly phrase: string; readonly count: number }[];
+}
+interface KeywordVolumeData {
+  readonly google?: readonly KeywordVolumeGoogleIdea[];
+  readonly yandex?: readonly KeywordVolumeYandexSeed[];
+}
+
+// Pure, deterministic — no I/O, no model call. expectedImpressions comes
+// from REAL search volume (matched against the keywords the model actually
+// chose for that channel); expectedClicks/expectedConversions are plain
+// arithmetic off the model's own ctrEstimate/crEstimate. The model is never
+// trusted to do this multiplication itself (2026-09-03, Owner's explicit
+// call — see plan "Ground PPC keyword/ad-copy decisions in real
+// search-volume data before the model decides").
+export function computeDemandForecast(
+  volumeData: unknown,
+  result: PpcSetupResult,
+): PpcSetupResult["demandForecast"] {
+  const data = volumeData as KeywordVolumeData | undefined;
+  if (!data || !result.ctrCrEstimates) return undefined;
+
+  const googleVolumeByText = new Map((data.google ?? []).map((idea) => [idea.text.toLowerCase(), idea.avgMonthlySearches ?? 0]));
+  const yandexVolumeByPhrase = new Map(
+    (data.yandex ?? []).flatMap((seed) => (seed.results ?? []).map((r) => [r.phrase.toLowerCase(), r.count] as const)),
+  );
+
+  const forecast: Record<
+    string,
+    { expectedImpressions: number; expectedClicks: number; expectedConversions: number; ctrEstimate: number; crEstimate: number }
+  > = {};
+
+  for (const [channel, estimate] of Object.entries(result.ctrCrEstimates)) {
+    const keywords = result.keywords?.[channel] ?? [];
+    if (keywords.length === 0) continue;
+    const volumeByText = channel === "yandex-direct" ? yandexVolumeByPhrase : googleVolumeByText;
+    const expectedImpressions = keywords.reduce((sum, kw) => sum + (volumeByText.get(kw.toLowerCase()) ?? 0), 0);
+    if (expectedImpressions === 0) continue; // no real volume matched — nothing to forecast from
+    const expectedClicks = expectedImpressions * estimate.ctrEstimate;
+    const expectedConversions = expectedClicks * estimate.crEstimate;
+    forecast[channel] = {
+      expectedImpressions,
+      expectedClicks,
+      expectedConversions,
+      ctrEstimate: estimate.ctrEstimate,
+      crEstimate: estimate.crEstimate,
+    };
+  }
+
+  return Object.keys(forecast).length > 0 ? forecast : undefined;
+}
+
 function optimizeToolId(platform: "google-ads" | "yandex-direct"): string {
   return platform === "google-ads" ? "google-ads-optimize" : "yandex-direct-optimize";
 }
@@ -284,6 +465,11 @@ async function handleRecommend(
   try {
     const endDate = new Date().toISOString().slice(0, 10);
     const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    // Two-week window for search terms — matches the "since last audit"
+    // cadence medavenue-analyst.md used; 30 days of raw search-term rows on
+    // an active account is a lot of noise for negative-keyword mining and
+    // rarely changes the answer.
+    const searchTermsStartDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const [campaigns, report] = await Promise.all([
       input.tools.invoke(toolId, { action: "listCampaigns", customerId: payload.externalAccountId, clientLogin: payload.externalAccountId }),
       input.tools.invoke(toolId, {
@@ -296,7 +482,65 @@ async function handleRecommend(
         goalIds: payload.conversionActionIdsOrGoalIds ?? [],
       }),
     ]);
-    campaignData = { campaigns, report };
+
+    // Same enrichment for every client on this platform, driven only by the
+    // account id and goal/conversion ids already in the payload — this is
+    // the generalized form of what made .claude/agents/medavenue-analyst.md's
+    // manual audit more accurate than a from-scratch generic pass: search
+    // terms for negative-keyword mining and cross-campaign cannibalization,
+    // plus the platform's own "would more budget help" signal (Google's
+    // impression share, Yandex's WeeklySpendLimit vs actual spend). Each
+    // call is independently best-effort — a Performance Max-only account
+    // legitimately returns near-empty search terms/impression share, and
+    // that shouldn't fail the whole recommend run.
+    const [searchTerms, budgetSignal] = await Promise.all([
+      input.tools
+        .invoke(toolId, {
+          action: "getSearchTermsReport",
+          customerId: payload.externalAccountId,
+          clientLogin: payload.externalAccountId,
+          startDate: searchTermsStartDate,
+          endDate,
+          goalIds: payload.conversionActionIdsOrGoalIds ?? [],
+        })
+        .catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
+      payload.platform === "google-ads"
+        ? input.tools
+            .invoke(toolId, {
+              action: "getImpressionShareReport",
+              customerId: payload.externalAccountId,
+              startDate,
+              endDate,
+            })
+            .catch((error) => ({ error: error instanceof Error ? error.message : String(error) }))
+        : Promise.all(
+            ((campaigns as ReadonlyArray<{ readonly Id?: number }>) ?? [])
+              .filter((c) => typeof c.Id === "number")
+              .map(async (c) => {
+                // A campaign uses exactly one of these two — autostrategy
+                // WeeklySpendLimit (search OR network branch) or a fixed
+                // DailyBudget — never both. Fetching both and letting the
+                // caller see whichever is non-null (instead of guessing
+                // which one applies ahead of time) is what closes the two
+                // gaps a generic-tooling audit hit 2026-09-03: РСЯ
+                // campaigns whose autostrategy lived in the Network branch,
+                // and HIGHEST_POSITION campaigns with no autostrategy at
+                // all, where the fixed DailyBudget was previously
+                // unreadable through any shared tool function.
+                const [weeklySpendLimit, dailyBudget] = await Promise.all([
+                  input.tools
+                    .invoke(toolId, { action: "getWeeklySpendLimit", campaignId: c.Id, clientLogin: payload.externalAccountId })
+                    .catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
+                  input.tools
+                    .invoke(toolId, { action: "getDailyBudget", campaignId: c.Id, clientLogin: payload.externalAccountId })
+                    .catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
+                ]);
+                return { campaignId: c.Id, weeklySpendLimit, dailyBudget };
+              }),
+          ),
+    ]);
+
+    campaignData = { campaigns, report, searchTerms, budgetSignal };
     priorChanges = await input.tools.invoke("campaign-changes", {
       action: "listCampaignChanges",
       clientAdAccountId: payload.clientAdAccountId,
@@ -479,5 +723,91 @@ async function handleVerify(input: AgentInput<PpcTaskPayload>, payload: PpcVerif
     status: "success",
     result: { action: "verify", actualEffect, afterMetrics },
     decisions: [{ summary: actualEffect }],
+  };
+}
+
+// Own plain shape, not imported from apps/web/lib/campaign-trends.ts — same
+// "own plain shape, real-tools.ts maps it onto the tool's real type"
+// pattern PpcYandexBiddingStrategy already uses (packages/agents/ppc can't
+// depend on apps/web's modules).
+interface TrendDegradationAlert {
+  readonly campaignId: string;
+  readonly campaignName: string;
+  readonly totalIncreasePct: number;
+  readonly cpaHistory: readonly number[];
+  readonly weekStarts: readonly string[];
+  readonly hypothesis: string;
+  readonly recommendation: string;
+}
+
+const TREND_DEGRADATION_CHANGE_TYPE = "trend_degradation";
+
+async function handleTrendAlerts(input: AgentInput<PpcTaskPayload>, payload: PpcTrendAlertsPayload): Promise<AgentOutput<PpcResult>> {
+  let alerts: readonly TrendDegradationAlert[];
+  let openChanges: ReadonlyArray<{ readonly campaignId: string | null; readonly changeType: string }>;
+  try {
+    [alerts, openChanges] = await Promise.all([
+      input.tools.invoke("campaign-trends", {
+        action: "detectSustainedDegradation",
+        clientId: payload.clientId,
+        platform: payload.platform,
+        minWeeks: payload.minWeeks,
+        minTotalIncreasePct: payload.minTotalIncreasePct,
+        maxDipSteps: payload.maxDipSteps,
+      }) as Promise<readonly TrendDegradationAlert[]>,
+      input.tools.invoke("campaign-changes", {
+        action: "listCampaignChanges",
+        clientAdAccountId: payload.clientAdAccountId,
+        status: "proposed",
+      }) as Promise<ReadonlyArray<{ readonly campaignId: string | null; readonly changeType: string }>>,
+    ]);
+  } catch (error) {
+    return { status: "failed", error: error as AgentError };
+  }
+
+  // Never re-propose the same open alert every time this runs (weekly cron)
+  // — a campaign already flagged and awaiting human review doesn't need a
+  // second identical row just because the underlying degradation is still
+  // there. Re-flags once the existing row leaves 'proposed' (approved,
+  // rejected, or applied) — see docs/03-architecture/campaign-weekly-trends.md.
+  const alreadyOpen = new Set(
+    openChanges.filter((c) => c.changeType === TREND_DEGRADATION_CHANGE_TYPE && c.campaignId).map((c) => c.campaignId as string),
+  );
+
+  const toPropose = alerts.filter((a) => !alreadyOpen.has(a.campaignId));
+  const skippedDuplicates = alerts.length - toPropose.length;
+
+  const changeLogIds: string[] = [];
+  try {
+    for (const alert of toPropose) {
+      const created = (await input.tools.invoke("campaign-changes", {
+        action: "proposeCampaignChange",
+        clientAdAccountId: payload.clientAdAccountId,
+        campaignId: alert.campaignId,
+        campaignName: alert.campaignName,
+        changeType: TREND_DEGRADATION_CHANGE_TYPE,
+        changeDescription: `${alert.hypothesis}\n\n${alert.recommendation}`,
+        expectedEffect: undefined,
+        beforeMetrics: { cpaHistory: alert.cpaHistory, weekStarts: alert.weekStarts, totalIncreasePct: alert.totalIncreasePct },
+        proposedByRunId: input.task.context.taskId,
+        createdBy: "agent:ppc-trend-alerts",
+      })) as { id: string };
+      changeLogIds.push(created.id);
+    }
+  } catch (error) {
+    return { status: "failed", error: error as AgentError };
+  }
+
+  await input.memory.write("task", "trend-alerts", { alertsFound: alerts.length, changeLogIds, skippedDuplicates });
+
+  const summary =
+    alerts.length === 0
+      ? "Устойчивых деградаций CPA не найдено."
+      : `Найдено ${alerts.length} устойчивых деградаций CPA, из них ${toPropose.length} новых записаны в campaign_changes_log (${skippedDuplicates} уже были открыты ранее).`;
+
+  return {
+    status: "success",
+    result: { action: "trend-alerts", alertsFound: alerts.length, changeLogIds, skippedDuplicates },
+    decisions: [{ summary }],
   };
 }

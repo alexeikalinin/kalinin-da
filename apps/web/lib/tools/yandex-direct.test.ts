@@ -4,6 +4,7 @@ import {
   parseForecastCpc,
   getWeeklySpendLimit,
   adjustWeeklySpendLimit,
+  getDailyBudget,
   getKeywordBids,
   addNegativeKeywords,
   setCampaignStatus,
@@ -114,13 +115,30 @@ test("getWeeklySpendLimit finds the nested WeeklySpendLimit under whatever key m
     ],
   });
   const result = await getWeeklySpendLimit(123);
-  assert.deepEqual(result, { weeklySpendLimitMicros: 5_000_000, strategyType: "AverageCpa" });
+  assert.deepEqual(result, { weeklySpendLimitMicros: 5_000_000, strategyType: "AverageCpa", scope: "Search" });
 });
 
-test("getWeeklySpendLimit returns null when the campaign has no autostrategy Search block", async () => {
+test("getWeeklySpendLimit falls back to the Network branch for network-only (РСЯ) campaigns", async () => {
+  respond = () => ({
+    Campaigns: [
+      {
+        TextCampaign: {
+          BiddingStrategy: {
+            Search: { BiddingStrategyType: "SERVING_OFF" },
+            Network: { BiddingStrategyType: "AverageCpc", AverageCpc: { WeeklySpendLimit: 7_000_000, AverageCpc: 50_000 } },
+          },
+        },
+      },
+    ],
+  });
+  const result = await getWeeklySpendLimit(123);
+  assert.deepEqual(result, { weeklySpendLimitMicros: 7_000_000, strategyType: "AverageCpc", scope: "Network" });
+});
+
+test("getWeeklySpendLimit returns null when the campaign has no autostrategy in Search or Network", async () => {
   respond = () => ({ Campaigns: [{}] });
   const result = await getWeeklySpendLimit(123);
-  assert.deepEqual(result, { weeklySpendLimitMicros: null, strategyType: undefined });
+  assert.deepEqual(result, { weeklySpendLimitMicros: null, strategyType: undefined, scope: undefined });
 });
 
 test("adjustWeeklySpendLimit writes back under the campaign's own strategy type key", async () => {
@@ -142,6 +160,18 @@ test("adjustWeeklySpendLimit writes back under the campaign's own strategy type 
 test("adjustWeeklySpendLimit refuses to write when the campaign has no autostrategy", async () => {
   respond = () => ({ Campaigns: [{}] });
   await assert.rejects(() => adjustWeeklySpendLimit(123, 9_000_000), /no autostrategy/);
+});
+
+test("getDailyBudget reads Amount/Mode from an existing campaign's fixed DailyBudget", async () => {
+  respond = () => ({ Campaigns: [{ DailyBudget: { Amount: 20_000_000, Mode: "STANDARD" } }] });
+  const result = await getDailyBudget(123);
+  assert.deepEqual(result, { dailyBudgetMicros: 20_000_000, mode: "STANDARD" });
+});
+
+test("getDailyBudget returns null when the campaign has no fixed DailyBudget (i.e. it's on an autostrategy)", async () => {
+  respond = () => ({ Campaigns: [{}] });
+  const result = await getDailyBudget(123);
+  assert.deepEqual(result, { dailyBudgetMicros: null, mode: undefined });
 });
 
 test("getKeywordBids reads Bid/ContextBid from keywords.get, not keywordbids.get", async () => {

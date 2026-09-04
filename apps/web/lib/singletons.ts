@@ -70,6 +70,8 @@ function createSingletons(): Singletons {
     "openai-ads",
     "openai-ads-optimize",
     "campaign-changes",
+    "keyword-volume",
+    "campaign-trends",
   ];
   for (const toolId of toolIds) {
     registry.register(APPROVER, { toolId, displayName: toolId });

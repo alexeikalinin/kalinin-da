@@ -10,7 +10,9 @@ import {
   createOrReusePausedCampaign,
   getAccountCurrency as getGoogleAdsAccountCurrency,
   getCampaignReport as getGoogleAdsCampaignReport,
+  getImpressionShareReport as getGoogleAdsImpressionShareReport,
   getKeywordIdeas,
+  getSearchTermsReport as getGoogleAdsSearchTermsReport,
   isGoogleAdsConfigured,
   listCampaigns as listGoogleAdsCampaigns,
   listGa4ImportCandidates,
@@ -31,7 +33,9 @@ import {
   createOrReusePausedCampaign as createOrReuseYandexCampaign,
   getAccountCurrency as getYandexAccountCurrency,
   getCampaignReport as getYandexCampaignReport,
+  getDailyBudget,
   getKeywordBids,
+  getSearchTermsReport as getYandexSearchTermsReport,
   getWeeklySpendLimit,
   isYandexConfigured,
   listCampaigns as listYandexCampaigns,
@@ -87,7 +91,9 @@ import {
   recordVerification,
   updateCampaignChangeStatus,
 } from "./tools/campaign-changes-store.ts";
+import { detectSustainedDegradation, getWeeklyCampaignHistory } from "./campaign-trends.ts";
 import { generateDesign, isV0Configured } from "./tools/v0-design.ts";
+import { getWordstatFrequency, isWordstatConfigured, type WordstatResult } from "./tools/yandex-wordstat.ts";
 
 // Real ToolInvoker (packages/tools/src/invoke.ts) for the tools that have
 // a genuine implementation today — mirrors real-models.ts's one-dispatcher-
@@ -190,6 +196,79 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }
+    }
+    case "keyword-volume": {
+      // Real search-volume grounding, fetched BEFORE PPC's model call
+      // decides keywords/ad copy (ppc-agent.ts's handleSetup) — the fix for
+      // the exact gap the "google-ads" case above documents at its own
+      // getKeywordIdeas call: that one is post-hoc decoration on an
+      // already-built campaign; this one grounds the decision itself.
+      // Deliberately retries each source a few times before giving up on
+      // it — a single transient failure must not silently degrade PPC back
+      // to inventing keywords blind, per the Owner's explicit call
+      // (2026-09-03). Google and Yandex are attempted independently: one
+      // source's exhausted retries don't block the other's attempt.
+      const { seedKeywords, channels, googleAdsCustomerId, geoTargetConstants, languageConstants, regionIds } = args as {
+        seedKeywords: readonly string[];
+        channels: readonly string[];
+        googleAdsCustomerId?: string;
+        geoTargetConstants?: readonly string[];
+        languageConstants?: readonly string[];
+        regionIds?: readonly number[];
+      };
+
+      const wantGoogle = channels.includes("google-ads");
+      const wantYandex = channels.includes("yandex-direct");
+      const failures: string[] = [];
+
+      let google: unknown;
+      if (wantGoogle) {
+        const customerIdForLookup = googleAdsCustomerId ?? process.env.GOOGLE_ADS_CUSTOMER_ID;
+        if (!isGoogleAdsConfigured() || !customerIdForLookup) {
+          failures.push("google-ads: no credentials/customer id configured");
+        } else {
+          try {
+            google = await retry(
+              () =>
+                getKeywordIdeas(seedKeywords, customerIdForLookup, {
+                  geoTargetConstants,
+                  languageConstant: languageConstants?.[0],
+                }),
+              3,
+            );
+          } catch (error) {
+            failures.push(`google-ads: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
+
+      let yandex: unknown;
+      if (wantYandex) {
+        if (!isWordstatConfigured()) {
+          failures.push("yandex-direct: Wordstat not configured (YANDEX_SEARCH_API_KEY/YANDEX_SEARCH_API_FOLDER_ID)");
+        } else {
+          try {
+            const regionIdStrings = regionIds?.map(String) ?? [];
+            const perSeed: Array<{ readonly seed: string } & WordstatResult> = [];
+            for (const seed of seedKeywords) {
+              perSeed.push({ seed, ...(await retry(() => getWordstatFrequency(seed, regionIdStrings), 3)) });
+            }
+            yandex = perSeed;
+          } catch (error) {
+            failures.push(`yandex-direct: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
+
+      // Fail the Task only if every requested source ended up unusable —
+      // never silently return nothing while a channel was actually asked
+      // for (that would be the exact bug this tool exists to prevent).
+      const requestedSources = [wantGoogle, wantYandex].filter(Boolean).length;
+      if (requestedSources > 0 && failures.length === requestedSources) {
+        throw new ToolUnavailableError(`keyword-volume: all requested sources failed — ${failures.join("; ")}`);
+      }
+
+      return { google, yandex };
     }
     case "vk-ads": {
       const { siteUrl } = args as { siteUrl: string };
@@ -388,6 +467,17 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
             };
             return await getGoogleAdsCampaignReport(customerId, { startDate, endDate, conversionActionIds });
           }
+          // Added for the "recommend" action's negative-keyword mining and
+          // scale-vs-optimize verdicts — see google-ads.ts's
+          // getSearchTermsReport/getImpressionShareReport comments.
+          case "getSearchTermsReport": {
+            const { startDate, endDate } = rest as { startDate: string; endDate: string };
+            return await getGoogleAdsSearchTermsReport(customerId, { startDate, endDate });
+          }
+          case "getImpressionShareReport": {
+            const { startDate, endDate } = rest as { startDate: string; endDate: string };
+            return await getGoogleAdsImpressionShareReport(customerId, { startDate, endDate });
+          }
           case "getAccountCurrency":
             return await getGoogleAdsAccountCurrency(customerId);
           default:
@@ -405,6 +495,13 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
           case "getWeeklySpendLimit": {
             const { campaignId } = rest as { campaignId: number };
             return await getWeeklySpendLimit(campaignId, clientLogin);
+          }
+          // Complements getWeeklySpendLimit — a campaign uses exactly one of
+          // the two (fixed DailyBudget vs autostrategy WeeklySpendLimit),
+          // never both. See yandex-direct.ts's getDailyBudget comment.
+          case "getDailyBudget": {
+            const { campaignId } = rest as { campaignId: number };
+            return await getDailyBudget(campaignId, clientLogin);
           }
           case "adjustWeeklySpendLimit": {
             const { campaignId, newLimitMicros } = rest as { campaignId: number; newLimitMicros: number };
@@ -429,6 +526,12 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
           case "getCampaignReport": {
             const { startDate, endDate, goalIds } = rest as { startDate: string; endDate: string; goalIds: readonly string[] };
             return await getYandexCampaignReport(clientLogin, { startDate, endDate, goalIds });
+          }
+          // Added for the "recommend" action's negative-keyword mining —
+          // see yandex-direct.ts's getSearchTermsReport comment.
+          case "getSearchTermsReport": {
+            const { startDate, endDate, goalIds } = rest as { startDate: string; endDate: string; goalIds: readonly string[] };
+            return await getYandexSearchTermsReport(clientLogin, { startDate, endDate, goalIds });
           }
           case "getAccountCurrency":
             return await getYandexAccountCurrency(clientLogin);
@@ -510,6 +613,15 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }
     }
+    case "client-context": {
+      const { clientId } = args as { clientId: string };
+      if (!isSupabaseConfigured()) return { note: "Supabase not configured — no approved target conversions or synced ad_stat available." };
+      try {
+        return await getClientContext(clientId);
+      } catch (error) {
+        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
+      }
+    }
     case "seo-service": {
       // SEO Agent (packages/agents/seo) only ever calls this with { url } —
       // it has no client_ad_account to resolve a customerId from at this
@@ -523,15 +635,6 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
       }
       try {
         return await getSeoInsights(url, customerId, {}, { loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID });
-      } catch (error) {
-        throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
-      }
-    }
-    case "client-context": {
-      const { clientId } = args as { clientId: string };
-      if (!isSupabaseConfigured()) return { note: "Supabase not configured — no approved target conversions or synced ad_stat available." };
-      try {
-        return await getClientContext(clientId);
       } catch (error) {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }
@@ -692,6 +795,38 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
         throw new ToolUnavailableError(error instanceof Error ? error.message : String(error));
       }
     }
+    // Weekly per-campaign trend history + sustained-CPA-degradation
+    // detection (2026-09-03, docs/03-architecture/campaign-weekly-trends.md)
+    // — ppc-agent's "trend-alerts" action's only I/O dependency besides
+    // "campaign-changes". Read-only over ad_stat/campaign_status, so no
+    // ToolUnavailableError graceful-degrade branch is needed beyond
+    // Supabase itself (campaign-trends.ts throws its own clear errors).
+    case "campaign-trends": {
+      const { action, ...rest } = args as { action: string; [key: string]: unknown };
+      switch (action) {
+        case "getWeeklyCampaignHistory": {
+          const { clientId, platform, includeCurrentPartialWeek } = rest as {
+            clientId: string;
+            platform?: "google-ads" | "yandex-direct";
+            includeCurrentPartialWeek?: boolean;
+          };
+          return await getWeeklyCampaignHistory(clientId, { platform, includeCurrentPartialWeek });
+        }
+        case "detectSustainedDegradation": {
+          const { clientId, platform, minWeeks, minTotalIncreasePct, maxDipSteps, excludeStopped } = rest as {
+            clientId: string;
+            platform?: "google-ads" | "yandex-direct";
+            minWeeks?: number;
+            minTotalIncreasePct?: number;
+            maxDipSteps?: number;
+            excludeStopped?: boolean;
+          };
+          return await detectSustainedDegradation(clientId, { platform, minWeeks, minTotalIncreasePct, maxDipSteps, excludeStopped });
+        }
+        default:
+          throw new Error(`campaign-trends: unknown action "${action}"`);
+      }
+    }
     case "creative-generation": {
       const { briefText, channels } = args as { briefText: string; channels: readonly string[] };
       if (!isCreativeGenerationConfigured()) {
@@ -750,3 +885,22 @@ export const realToolInvoker: ToolInvoker = async (toolId, args) => {
       throw new Error(`No real implementation wired for tool "${toolId}" yet.`);
   }
 };
+
+// Small local retry helper for the "keyword-volume" case above — this
+// codebase has no shared retry utility (each tool module implements its
+// own loop, e.g. yandex-direct.ts's report-polling loop); a few-line inline
+// helper here is simpler than introducing a new shared abstraction for one
+// caller. Fixed short backoff, not exponential — these are quick read-only
+// lookups, not long-running operations.
+async function retry<T>(fn: () => Promise<T>, attempts: number): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (i < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 300 * (i + 1)));
+    }
+  }
+  throw lastError;
+}

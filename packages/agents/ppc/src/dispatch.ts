@@ -4,7 +4,7 @@ import type { RoleTemplate } from "@ama/prompt-architecture";
 import type { CredentialStore, ToolInvoker, ToolRegistry } from "@ama/tools";
 import type { ModelCatalog, TaskComplexity } from "@ama/cost-router";
 import { prepareAgentInvocation } from "@ama/workflow-engine";
-import type { PpcApplyPayload, PpcRecommendPayload, PpcSetupPayload, PpcTaskPayload, PpcVerifyPayload } from "./ppc-agent.ts";
+import type { PpcApplyPayload, PpcRecommendPayload, PpcSetupPayload, PpcTaskPayload, PpcTrendAlertsPayload, PpcVerifyPayload } from "./ppc-agent.ts";
 
 const MEMORY_LEVELS = ["task", "project", "client_kb", "domain_kb"] as const;
 
@@ -64,7 +64,10 @@ export function preparePpcInvocation(input: PreparePpcInvocationInput) {
     domainFactKeys: input.domainFactKeys ?? [],
     projectContextKeys: input.projectContextKeys ?? [],
     memoryLevels: [...MEMORY_LEVELS],
-    toolIds: input.channels,
+    // "keyword-volume" added 2026-09-03 alongside the channel tool ids —
+    // handleSetup calls it directly (not through a channel), so it needs
+    // its own allowance in the tool port's allowedToolIds check.
+    toolIds: [...input.channels, "keyword-volume"],
     complexity: input.complexity,
     invokeTool: input.invokeTool,
     buildPayload: (prompt, modelId): PpcSetupPayload => ({
@@ -79,6 +82,12 @@ export function preparePpcInvocation(input: PreparePpcInvocationInput) {
       regionIds: input.regionIds,
       geoTargetConstants: input.geoTargetConstants,
       languageConstants: input.languageConstants,
+      // Forwarded into the payload itself, not just used for prompt
+      // assembly above — handleSetup reads these keys directly off Project
+      // Memory before calling the model (2026-09-03), since Research's
+      // candidateKeywords is a structured field assemblePrompt's
+      // string-only readStrings would otherwise drop.
+      projectContextKeys: input.projectContextKeys,
     }),
   });
 }
@@ -199,6 +208,53 @@ export function preparePpcVerifyInvocation(input: PreparePpcVerifyInvocationInpu
       changeLogId: input.changeLogId,
       platform: input.platform,
       externalAccountId: input.externalAccountId,
+    }),
+  });
+}
+
+export interface PreparePpcTrendAlertsInvocationInput {
+  readonly store: MemoryStore;
+  readonly registry: ToolRegistry;
+  readonly credentials: CredentialStore;
+  readonly catalog: ModelCatalog;
+  readonly template: RoleTemplate;
+  readonly context: Readonly<InvocationContext>;
+  readonly taskDescription: string;
+  readonly clientAdAccountId: string;
+  readonly clientId: string;
+  readonly platform: "google-ads" | "yandex-direct";
+  readonly minWeeks?: number;
+  readonly minTotalIncreasePct?: number;
+  readonly maxDipSteps?: number;
+  readonly complexity: TaskComplexity;
+  readonly invokeTool: ToolInvoker;
+}
+
+export function preparePpcTrendAlertsInvocation(input: PreparePpcTrendAlertsInvocationInput) {
+  return prepareAgentInvocation<PpcTaskPayload>({
+    store: input.store,
+    registry: input.registry,
+    credentials: input.credentials,
+    catalog: input.catalog,
+    template: input.template,
+    context: input.context,
+    taskDescription: input.taskDescription,
+    clientFactKeys: [],
+    memoryLevels: [...MEMORY_LEVELS],
+    // Only "campaign-trends" (read) + "campaign-changes" (write) —
+    // deterministic, no model call, so none of OPTIMIZE_TOOL_IDS'
+    // platform-write tool ids are needed here.
+    toolIds: ["campaign-trends", "campaign-changes"],
+    complexity: input.complexity,
+    invokeTool: input.invokeTool,
+    buildPayload: (): PpcTrendAlertsPayload => ({
+      action: "trend-alerts",
+      clientAdAccountId: input.clientAdAccountId,
+      clientId: input.clientId,
+      platform: input.platform,
+      minWeeks: input.minWeeks,
+      minTotalIncreasePct: input.minTotalIncreasePct,
+      maxDipSteps: input.maxDipSteps,
     }),
   });
 }

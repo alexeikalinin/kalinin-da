@@ -3,9 +3,11 @@ import {
   createPpcAgent,
   preparePpcApplyInvocation,
   preparePpcRecommendInvocation,
+  preparePpcTrendAlertsInvocation,
   preparePpcVerifyInvocation,
   type PpcApplyResult,
   type PpcRecommendResult,
+  type PpcTrendAlertsResult,
   type PpcVerifyResult,
 } from "@ama/agent-ppc";
 import { recordObservation } from "@ama/learning";
@@ -145,4 +147,40 @@ export async function runVerify(input: RunVerifyInput): Promise<PpcVerifyResult>
   }
 
   return result;
+}
+
+export interface RunTrendAlertsInput {
+  readonly clientAdAccountId: string;
+  readonly clientId: string;
+  readonly platform: "google-ads" | "yandex-direct";
+  readonly minWeeks?: number;
+  readonly minTotalIncreasePct?: number;
+  readonly maxDipSteps?: number;
+}
+
+// Weekly sustained-CPA-degradation detection (2026-09-03,
+// docs/03-architecture/campaign-weekly-trends.md) — deterministic, no model
+// call (same "mechanical, not judgment" shape as runApply/runVerify above),
+// called from the weekly cron (apps/web/app/api/cron/detect-trend-alerts).
+export async function runTrendAlerts(input: RunTrendAlertsInput): Promise<PpcTrendAlertsResult> {
+  const { store, registry, credentials, catalog } = getSingletons();
+  const { agentInput } = preparePpcTrendAlertsInvocation({
+    store, registry, credentials, catalog,
+    template: { roleId: asRoleId("ppc"), version: 1, purpose: "PPC — trend-alerts", responsibility: "Detect sustained CPA degradation and log it for review" },
+    context: ctx(input.clientAdAccountId, `trend-alerts-${Date.now()}`),
+    taskDescription: "Найти устойчивый рост CPA по кампаниям за последние недели и записать как предложенные изменения.",
+    clientAdAccountId: input.clientAdAccountId,
+    clientId: input.clientId,
+    platform: input.platform,
+    minWeeks: input.minWeeks,
+    minTotalIncreasePct: input.minTotalIncreasePct,
+    maxDipSteps: input.maxDipSteps,
+    complexity: "routine",
+    invokeTool: realToolInvoker,
+  });
+  const output = await createPpcAgent(realPpc).invoke(agentInput);
+  if (output.status !== "success") {
+    throw new Error(`Trend alerts failed: ${output.status === "failed" ? output.error.message : output.reason}`);
+  }
+  return output.result as PpcTrendAlertsResult;
 }

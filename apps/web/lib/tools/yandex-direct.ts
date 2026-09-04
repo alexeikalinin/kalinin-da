@@ -55,7 +55,7 @@ async function callDirect(
   return data.result;
 }
 
-interface DirectCampaign {
+export interface DirectCampaign {
   readonly Id: number;
   readonly Name: string;
   readonly Status: string;
@@ -732,8 +732,17 @@ export async function getForecastCpc(
 export interface WeeklySpendLimit {
   readonly weeklySpendLimitMicros: number | null; // null when the campaign has no autostrategy (e.g. uses a fixed DailyBudget instead)
   readonly strategyType: string | undefined; // e.g. "AverageCpa", "AverageCpc", "WbMaximumConversionRate" — whichever key matches BiddingStrategyType
+  readonly scope: "Search" | "Network" | undefined; // which branch of BiddingStrategy actually carried the autostrategy
 }
 
+// Real gap found 2026-09-03 auditing Медавеню through generic tooling: this
+// used to check ONLY the Search branch of BiddingStrategy. A РСЯ (network-only)
+// campaign has Search.BiddingStrategyType = SERVING_OFF (no WeeklySpendLimit
+// there at all — SERVING_OFF carries no nested params, see
+// SEARCH_STRATEGY_FIELD) and its real autostrategy/WeeklySpendLimit lives
+// under Network instead. Checking Search only made every РСЯ campaign look
+// like it "has no autostrategy" (null), when in fact the budget signal was
+// just in the other branch. Now checks both and reports which one matched.
 export async function getWeeklySpendLimit(
   campaignId: number,
   clientLogin?: string,
@@ -747,26 +756,30 @@ export async function getWeeklySpendLimit(
     accessTokenEnv,
   )) as {
     Campaigns: ReadonlyArray<{
-      TextCampaign?: { BiddingStrategy?: { Search?: Record<string, unknown> } };
+      TextCampaign?: { BiddingStrategy?: { Search?: Record<string, unknown>; Network?: Record<string, unknown> } };
     }>;
   };
 
-  const search = result.Campaigns[0]?.TextCampaign?.BiddingStrategy?.Search;
-  if (!search) return { weeklySpendLimitMicros: null, strategyType: undefined };
+  const biddingStrategy = result.Campaigns[0]?.TextCampaign?.BiddingStrategy;
+  if (!biddingStrategy) return { weeklySpendLimitMicros: null, strategyType: undefined, scope: undefined };
 
-  const strategyType = search.BiddingStrategyType as string | undefined;
-  // The strategy's own settings live nested under a key matching
-  // BiddingStrategyType (e.g. Search.AverageCpa.WeeklySpendLimit) — not a
-  // fixed field name, so this looks for whichever nested object actually
-  // carries WeeklySpendLimit rather than hardcoding one strategy's shape.
-  for (const [key, value] of Object.entries(search)) {
-    if (key === "BiddingStrategyType") continue;
-    if (value && typeof value === "object" && "WeeklySpendLimit" in (value as Record<string, unknown>)) {
-      const limit = (value as { WeeklySpendLimit?: number }).WeeklySpendLimit;
-      if (typeof limit === "number") return { weeklySpendLimitMicros: limit, strategyType };
+  for (const scope of ["Search", "Network"] as const) {
+    const branch = biddingStrategy[scope];
+    if (!branch) continue;
+    const strategyType = branch.BiddingStrategyType as string | undefined;
+    // The strategy's own settings live nested under a key matching
+    // BiddingStrategyType (e.g. Search.AverageCpa.WeeklySpendLimit) — not a
+    // fixed field name, so this looks for whichever nested object actually
+    // carries WeeklySpendLimit rather than hardcoding one strategy's shape.
+    for (const [key, value] of Object.entries(branch)) {
+      if (key === "BiddingStrategyType") continue;
+      if (value && typeof value === "object" && "WeeklySpendLimit" in (value as Record<string, unknown>)) {
+        const limit = (value as { WeeklySpendLimit?: number }).WeeklySpendLimit;
+        if (typeof limit === "number") return { weeklySpendLimitMicros: limit, strategyType, scope };
+      }
     }
   }
-  return { weeklySpendLimitMicros: null, strategyType };
+  return { weeklySpendLimitMicros: null, strategyType: undefined, scope: undefined };
 }
 
 export async function adjustWeeklySpendLimit(
@@ -776,10 +789,10 @@ export async function adjustWeeklySpendLimit(
   accessTokenEnv?: string,
 ): Promise<void> {
   const current = await getWeeklySpendLimit(campaignId, clientLogin, accessTokenEnv);
-  if (!current.strategyType) {
+  if (!current.strategyType || !current.scope) {
     throw new Error(
-      `Campaign ${campaignId} has no autostrategy BiddingStrategyType — cannot set WeeklySpendLimit ` +
-        `(it may use a fixed DailyBudget instead; that's set via a different field, not this function).`,
+      `Campaign ${campaignId} has no autostrategy BiddingStrategyType in either Search or Network — cannot set ` +
+        `WeeklySpendLimit (it may use a fixed DailyBudget instead — see getDailyBudget).`,
     );
   }
   await callDirect(
@@ -789,13 +802,61 @@ export async function adjustWeeklySpendLimit(
       Campaigns: [
         {
           Id: campaignId,
-          TextCampaign: { BiddingStrategy: { Search: { [current.strategyType]: { WeeklySpendLimit: newLimitMicros } } } },
+          TextCampaign: { BiddingStrategy: { [current.scope]: { [current.strategyType]: { WeeklySpendLimit: newLimitMicros } } } },
         },
       ],
     },
     clientLogin,
     accessTokenEnv,
   );
+}
+
+export interface DailyBudgetInfo {
+  readonly dailyBudgetMicros: number | null; // null when the campaign has no fixed DailyBudget (i.e. it's on an autostrategy — see getWeeklySpendLimit instead)
+  readonly mode: string | undefined; // "STANDARD" | "DISTRIBUTED"
+}
+
+// Real gap found 2026-09-03: this file could only WRITE a DailyBudget
+// (createOrReusePausedCampaign), never read one back for an existing
+// campaign — so campaigns on a fixed daily budget (HIGHEST_POSITION and
+// similar non-auto strategies) had no generic way to check "is this
+// campaign pinned at its budget?" at all. getWeeklySpendLimit legitimately
+// returns null for these (they have no autostrategy), which is correct but
+// was previously a dead end rather than a pointer to this function.
+export async function getDailyBudget(
+  campaignId: number,
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<DailyBudgetInfo> {
+  const result = (await callDirect(
+    "campaigns",
+    "get",
+    // Real bug found 2026-09-03 auditing Медавеню live: requesting
+    // FieldNames: ["Id", "DailyBudget"] ALONE silently returns
+    // DailyBudget: null even for a campaign confirmed (via the UI and via
+    // a raw request that also asked for TextCampaignFieldNames) to have a
+    // real fixed DailyBudget set — no error, no warning, just a false
+    // "this campaign has no daily budget" that would have wrongly excluded
+    // every HIGHEST_POSITION/manual-strategy campaign from the "is this
+    // pinned at its budget?" check this function exists for. Adding
+    // TextCampaignFieldNames: ["BiddingStrategy"] (a field this function
+    // doesn't even need) makes DailyBudget populate correctly — API-side
+    // quirk, not explained by Direct API v5 docs, confirmed by isolating it
+    // against the same campaign ID with/without that extra selector.
+    {
+      SelectionCriteria: { Ids: [campaignId] },
+      FieldNames: ["Id", "DailyBudget"],
+      TextCampaignFieldNames: ["BiddingStrategy"],
+    },
+    clientLogin,
+    accessTokenEnv,
+  )) as { Campaigns: ReadonlyArray<{ DailyBudget?: { Amount?: number; Mode?: string } }> };
+
+  const dailyBudget = result.Campaigns[0]?.DailyBudget;
+  return {
+    dailyBudgetMicros: typeof dailyBudget?.Amount === "number" ? dailyBudget.Amount : null,
+    mode: dailyBudget?.Mode,
+  };
 }
 
 export interface KeywordBid {
@@ -875,21 +936,24 @@ export interface DirectCampaignReportRow {
 }
 
 // Reports API (a separate resource from the JSON campaigns.get/add/suspend
-// methods used above) — one request returns campaign metrics AND per-goal
-// conversion columns together (Yandex bakes goal columns directly into the
-// TSV, unlike Google Ads' two-query split — see google-ads.ts's
-// getCampaignReport comment). Real gotchas found 2026-08-18 building the
-// Медавеню report: `CampaignStatus` is NOT a valid field for
-// CAMPAIGN_PERFORMANCE_REPORT (400 "неверное значение перечисления"); the
-// API can also legitimately respond 201/202 with a Retry-After-style delay
-// while the report is generated — this function does not yet retry on
-// that (real accounts so far always returned 200 synchronously within a
-// normal request timeout, but a busy/large report could still 202).
-export async function getCampaignReport(
+// methods used above). Real gotcha found 2026-08-18 building the Медавеню
+// report: `CampaignStatus` is NOT a valid field for CAMPAIGN_PERFORMANCE_REPORT
+// (400 "неверное значение перечисления").
+//
+// The API can also legitimately respond 201 (queued) or 202 (still
+// processing) with an empty body and a `retryIn` header while a report is
+// generated — confirmed for real 2026-09-03 running SEARCH_QUERY_PERFORMANCE_REPORT
+// against a live account (CAMPAIGN_PERFORMANCE_REPORT had so far always
+// returned 200 synchronously, which is why this wasn't caught earlier).
+// Without a retry loop, this silently returns 0 rows instead of failing
+// loudly — the caller sees "no search terms" rather than "report wasn't
+// ready yet", which is worse than an error. Shared by every report type
+// below so the fix only has to exist once.
+async function fetchDirectReport(
+  reportParams: Record<string, unknown>,
   clientLogin: string | undefined,
-  params: { readonly startDate: string; readonly endDate: string; readonly goalIds: readonly string[] },
-  accessTokenEnv?: string,
-): Promise<readonly DirectCampaignReportRow[]> {
+  accessTokenEnv: string | undefined,
+): Promise<string> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${getYandexAccessToken(accessTokenEnv)}`,
     "Accept-Language": "ru",
@@ -909,32 +973,56 @@ export async function getCampaignReport(
   };
   if (clientLogin) headers["Client-Login"] = clientLogin;
 
-  const response = await fetch(`${API_BASE}/reports`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      params: {
-        SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate },
-        Goals: params.goalIds,
-        // "Date" (not just DateFrom/DateTo in SelectionCriteria) is what
-        // makes the report return one row per campaign PER DAY instead of
-        // one aggregated row for the whole range — needed for real
-        // day-by-day ad_stat history, same reasoning as google-ads.ts's
-        // segments.date.
-        FieldNames: ["Date", "CampaignId", "CampaignName", "Impressions", "Clicks", "Cost", "Conversions"],
-        ReportName: `ama-report-${Date.now()}`,
-        ReportType: "CAMPAIGN_PERFORMANCE_REPORT",
-        DateRangeType: "CUSTOM_DATE",
-        Format: "TSV",
-        IncludeVAT: "NO",
-        IncludeDiscount: "NO",
-      },
-    }),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`Yandex Direct Reports API call failed: ${response.status} ${text}`);
+  const MAX_ATTEMPTS = 6; // Yandex docs suggest polling every few seconds; this caps total wait around ~30-60s
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const response = await fetch(`${API_BASE}/reports`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ params: reportParams }),
+    });
+    if (response.status === 201 || response.status === 202) {
+      // Report queued/processing — body is empty, `retryIn` header names
+      // the suggested wait in seconds (falls back to a fixed delay if absent).
+      const retryInSeconds = Number(response.headers.get("retryIn")) || 2 * attempt;
+      await sleep(retryInSeconds * 1000);
+      continue;
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Yandex Direct Reports API call failed: ${response.status} ${text}`);
+    }
+    return text;
   }
+  throw new Error(
+    `Yandex Direct Reports API report still not ready after ${MAX_ATTEMPTS} polling attempts — try a narrower date range.`,
+  );
+}
+
+export async function getCampaignReport(
+  clientLogin: string | undefined,
+  params: { readonly startDate: string; readonly endDate: string; readonly goalIds: readonly string[] },
+  accessTokenEnv?: string,
+): Promise<readonly DirectCampaignReportRow[]> {
+  const text = await fetchDirectReport(
+    {
+      SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate },
+      Goals: params.goalIds,
+      // "Date" (not just DateFrom/DateTo in SelectionCriteria) is what
+      // makes the report return one row per campaign PER DAY instead of
+      // one aggregated row for the whole range — needed for real
+      // day-by-day ad_stat history, same reasoning as google-ads.ts's
+      // segments.date.
+      FieldNames: ["Date", "CampaignId", "CampaignName", "Impressions", "Clicks", "Cost", "Conversions"],
+      ReportName: `ama-report-${Date.now()}`,
+      ReportType: "CAMPAIGN_PERFORMANCE_REPORT",
+      DateRangeType: "CUSTOM_DATE",
+      Format: "TSV",
+      IncludeVAT: "NO",
+      IncludeDiscount: "NO",
+    },
+    clientLogin,
+    accessTokenEnv,
+  );
 
   // First line is the report title ("Report <id> (<from> - <to>)"), not a
   // TSV header — skip it before handing off to the generic parser. A
@@ -959,6 +1047,71 @@ export async function getCampaignReport(
       cost: Number(row.Cost || 0),
       impressions: Number(row.Impressions || 0),
       clicks: Number(row.Clicks || 0),
+      conversionsByGoal,
+    };
+  });
+}
+
+export interface DirectSearchTermRow {
+  readonly campaignId: string;
+  readonly campaignName: string;
+  readonly adGroupId: string;
+  readonly adGroupName: string;
+  readonly searchTerm: string;
+  readonly impressions: number;
+  readonly clicks: number;
+  readonly cost: number;
+  readonly conversionsByGoal: Record<string, number>;
+}
+
+// Negative-keyword mining and cross-campaign cannibalization both need the
+// actual search terms that triggered a click, not just the bid keywords —
+// no generic tool in this file exposed that before this function (found
+// missing 2026-09-03 comparing a generic-tooling audit against
+// .claude/agents/medavenue-analyst.md's read of this same report type).
+// `Criterion` (not `Keyword`) is the field that actually carries the raw
+// search term in this report — using `Keyword` here returns the matched
+// bid keyword instead and silently defeats the whole exercise.
+export async function getSearchTermsReport(
+  clientLogin: string | undefined,
+  params: { readonly startDate: string; readonly endDate: string; readonly goalIds: readonly string[] },
+  accessTokenEnv?: string,
+): Promise<readonly DirectSearchTermRow[]> {
+  const text = await fetchDirectReport(
+    {
+      SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate },
+      Goals: params.goalIds,
+      FieldNames: ["CampaignId", "CampaignName", "AdGroupId", "AdGroupName", "Criterion", "Impressions", "Clicks", "Cost", "Conversions"],
+      ReportName: `ama-sqr-${Date.now()}`,
+      ReportType: "SEARCH_QUERY_PERFORMANCE_REPORT",
+      DateRangeType: "CUSTOM_DATE",
+      Format: "TSV",
+      IncludeVAT: "NO",
+      IncludeDiscount: "NO",
+    },
+    clientLogin,
+    accessTokenEnv,
+  );
+
+  const withoutTitle = text.slice(text.indexOf("\n") + 1);
+  const withoutFooter = withoutTitle.replace(/\n?Total rows: \d+\s*$/, "");
+  const rows = parseTsv(withoutFooter);
+
+  return rows.map((row) => {
+    const conversionsByGoal: Record<string, number> = {};
+    for (const goalId of params.goalIds) {
+      const value = row[`Conversions_${goalId}_LSCCD`];
+      conversionsByGoal[goalId] = value && value !== "--" ? Number(value) : 0;
+    }
+    return {
+      campaignId: row.CampaignId,
+      campaignName: row.CampaignName,
+      adGroupId: row.AdGroupId,
+      adGroupName: row.AdGroupName,
+      searchTerm: row.Criterion,
+      impressions: Number(row.Impressions || 0),
+      clicks: Number(row.Clicks || 0),
+      cost: Number(row.Cost || 0),
       conversionsByGoal,
     };
   });
