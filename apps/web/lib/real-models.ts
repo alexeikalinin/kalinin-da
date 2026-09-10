@@ -15,6 +15,7 @@ import type { QaModelCaller } from "@ama/agent-qa";
 import type { ReportModelCaller } from "@ama/agent-report-generator";
 import type { AgentArchitectModelCaller } from "@ama/agent-agent-architect";
 import { callClaudeForJson } from "./anthropic.ts";
+import { getSupabase } from "./supabase.ts";
 
 // Real Anthropic-backed implementations of every role's ModelCaller —
 // mirrors lib/orchestrator.ts's fake* callers one-for-one, so swapping is
@@ -25,6 +26,28 @@ const CHANNEL_SPLIT_SCHEMA = {
   type: "object" as const,
   additionalProperties: { type: "number" as const },
 };
+
+// PPC platform-news digest (2026-09-10, see lib/ppc-news-orchestrator.ts
+// and supabase/migrations/0014_ppc_platform_news.sql) — keeps realPpc/
+// realPpcRecommend's model calls grounded in recent ad-platform changes
+// instead of stale training-time knowledge (trigger: PPC agent didn't know
+// Google Ads RSAs had been replaced by combinatorial ads). Same "tool
+// output before model call" pattern as volumeData/campaignData below, just
+// sourced from the biweekly sync instead of a live API call.
+const PLATFORM_NEWS_WINDOW_DAYS = 30;
+
+async function fetchRecentPlatformNewsFact(): Promise<string | undefined> {
+  const since = new Date(Date.now() - PLATFORM_NEWS_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await getSupabase()
+    .from("ppc_platform_news")
+    .select("platform, title, summary, category, detected_at")
+    .gte("detected_at", since)
+    .order("detected_at", { ascending: false });
+  if (error || !data || data.length === 0) return undefined;
+
+  const lines = data.map((row) => `[${row.platform}] ${row.title} (${row.category}): ${row.summary}`);
+  return `Недавние изменения рекламных платформ (последние ${PLATFORM_NEWS_WINDOW_DAYS} дней):\n${lines.join("\n")}`;
+}
 
 export const realCeo: CeoModelCaller = async (prompt, modelId, input) => {
   // Was `void input` — the comment claimed this was "already embedded in
@@ -247,14 +270,16 @@ export const realPpc: PpcSetupModelCaller = async (prompt, modelId, volumeData) 
   // clientFacts so the model picks keywords/ad copy grounded in real
   // search demand instead of inventing them blind (2026-09-03 fix, same
   // "tool output before model call" pattern as realResearch above).
+  const platformNewsFact = await fetchRecentPlatformNewsFact();
   const groundedPrompt = {
     ...prompt,
-    clientFacts: volumeData
-      ? [
-          ...prompt.clientFacts,
-          `Реальные данные по частотности поисковых запросов (Google Keyword Planner / Yandex Wordstat):\n${JSON.stringify(volumeData, null, 2)}`,
-        ]
-      : prompt.clientFacts,
+    clientFacts: [
+      ...prompt.clientFacts,
+      ...(volumeData
+        ? [`Реальные данные по частотности поисковых запросов (Google Keyword Planner / Yandex Wordstat):\n${JSON.stringify(volumeData, null, 2)}`]
+        : []),
+      ...(platformNewsFact ? [platformNewsFact] : []),
+    ],
   };
   const out = await callClaudeForJson<{
     budgetSplit: Record<string, number>;
@@ -313,9 +338,14 @@ export const realPpc: PpcSetupModelCaller = async (prompt, modelId, volumeData) 
 // changes (folded in by ppc-agent's handleRecommend before this is
 // called) — same "tool output before model call" grounding as realResearch.
 export const realPpcRecommend: PpcRecommendModelCaller = async (prompt, modelId, campaignData) => {
+  const platformNewsFact = await fetchRecentPlatformNewsFact();
   const groundedPrompt = {
     ...prompt,
-    clientFacts: [...prompt.clientFacts, `Данные по кампаниям (реальные, за последний период):\n${JSON.stringify(campaignData)}`],
+    clientFacts: [
+      ...prompt.clientFacts,
+      `Данные по кампаниям (реальные, за последний период):\n${JSON.stringify(campaignData)}`,
+      ...(platformNewsFact ? [platformNewsFact] : []),
+    ],
   };
   const out = await callClaudeForJson<{
     proposedChanges: Array<{

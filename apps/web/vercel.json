@@ -7,6 +7,14 @@
     {
       "path": "/api/cron/detect-trend-alerts",
       "schedule": "0 4 * * 1"
+    },
+    {
+      "path": "/api/cron/sync-ppc-platform-news",
+      "schedule": "0 22 * * 0"
+    },
+    {
+      "path": "/api/cron/medavenue-weekly-sheet-report",
+      "schedule": "0 7 * * 1"
     }
   ]
 }

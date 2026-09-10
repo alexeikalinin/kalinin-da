@@ -1007,6 +1007,16 @@ export async function getCampaignReport(
     {
       SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate },
       Goals: params.goalIds,
+      // Real bug found 2026-09-10 comparing this report's total against the
+      // Direct UI for the same period/goals: without an explicit
+      // AttributionModels, the API defaults to an older click-based model
+      // (columns come back suffixed "_LSCCD") which undercounted real
+      // conversions by ~35% (59 vs the UI's 90) — the account's actual
+      // attribution setting is "Автоматическая", exposed here as "AUTO".
+      // Must match whichever model the UI/account actually uses, or every
+      // consumer of this report (ad_stat sync, DataLens) silently
+      // under-reports conversions.
+      AttributionModels: ["AUTO"],
       // "Date" (not just DateFrom/DateTo in SelectionCriteria) is what
       // makes the report return one row per campaign PER DAY instead of
       // one aggregated row for the whole range — needed for real
@@ -1037,7 +1047,7 @@ export async function getCampaignReport(
   return rows.map((row) => {
     const conversionsByGoal: Record<string, number> = {};
     for (const goalId of params.goalIds) {
-      const value = row[`Conversions_${goalId}_LSCCD`];
+      const value = row[`Conversions_${goalId}_AUTO`];
       conversionsByGoal[goalId] = value && value !== "--" ? Number(value) : 0;
     }
     return {
@@ -1081,6 +1091,9 @@ export async function getSearchTermsReport(
     {
       SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate },
       Goals: params.goalIds,
+      // Same AUTO-attribution fix as getCampaignReport above — must match
+      // the account's actual attribution setting, not the API's default.
+      AttributionModels: ["AUTO"],
       FieldNames: ["CampaignId", "CampaignName", "AdGroupId", "AdGroupName", "Criterion", "Impressions", "Clicks", "Cost", "Conversions"],
       ReportName: `ama-sqr-${Date.now()}`,
       ReportType: "SEARCH_QUERY_PERFORMANCE_REPORT",
@@ -1100,7 +1113,7 @@ export async function getSearchTermsReport(
   return rows.map((row) => {
     const conversionsByGoal: Record<string, number> = {};
     for (const goalId of params.goalIds) {
-      const value = row[`Conversions_${goalId}_LSCCD`];
+      const value = row[`Conversions_${goalId}_AUTO`];
       conversionsByGoal[goalId] = value && value !== "--" ? Number(value) : 0;
     }
     return {

@@ -106,3 +106,25 @@ export async function sendOutreachEmail(args: SendOutreachEmailArgs): Promise<Se
   await updateOutreachMessageStatus(args.outreachMessageId, "sent", { resendMessageId: data.id });
   return { sent: true, resendMessageId: data.id };
 }
+
+// Internal notification to the agency owner — deliberately separate from
+// sendOutreachEmail above (no suppression list, no daily cap, no
+// outreach_message_id FK; none of that applies to an internal alert).
+// Same shape as ppc-news-orchestrator.ts's private sendDigestEmail —
+// pulled out here so other internal jobs (weekly report self-verification,
+// etc.) can reuse it instead of re-implementing the same Resend call.
+// Silently returns false when Resend/domain isn't configured, matching
+// every other tools/*.ts "not configured yet" convention in this repo.
+export async function sendInternalEmail(to: string, subject: string, text: string): Promise<boolean> {
+  if (!isResendConfigured() || !isSendingDomainVerified()) return false;
+  const response = await fetch(`${RESEND_API_BASE}/emails`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ from: process.env.EMAIL_FROM_ADDRESS, to, subject, text }),
+    signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+  });
+  return response.ok;
+}
