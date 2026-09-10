@@ -6,6 +6,30 @@ import { getYandexAccessToken, isYandexConfigured } from "./yandex-oauth.ts";
 import { parseTsv } from "./tsv.ts";
 
 const API_BASE = "https://api.direct.yandex.com/json/v5";
+// RESPONSIVE_AD (combinatorial ads, up to 7 titles / 3 texts) isn't
+// supported for writes on v5 — ads.update on that ad type 200s with a
+// per-item error buried in the result body ("Объявление данного типа не
+// поддерживается в v5, используйте v501"), not a top-level `error`, so a
+// naive caller sees "success". Found for real 2026-09-10 testing
+// updateResponsiveAdContent. Reads (ads.get) work fine on v5; only writes
+// to this ad type need v501.
+const API_BASE_V501 = "https://api.direct.yandex.com/json/v501";
+
+// Yandex object IDs (ads, ad groups) can exceed 2^53 (19 digits) — passing
+// one through as a JS `number` silently rounds it (found for real
+// 2026-09-10: two different ad IDs both rounded to 1917464866284975000,
+// and every rawId() call below independently confirmed it by round-
+// tripping through the wrong ad). Callers must keep large IDs as strings
+// end to end; rawId() splices the digits into the outgoing JSON as an
+// unquoted integer literal (never via JSON.stringify(Number(id))) so
+// precision survives the request.
+function rawId(id: string): string {
+  if (!/^\d+$/.test(id)) throw new Error(`rawId: not a plain integer string: ${id}`);
+  return `__RAWID_${id}_RAWID__`;
+}
+function encodeRawIds(body: string): string {
+  return body.replace(/"__RAWID_(\d+)_RAWID__"/g, "$1");
+}
 const DEFAULT_TOTAL_DAILY_BUDGET_MICROS = 20_000_000; // 20 currency units/day, placeholder default
 // Direct API v5 rejects DailyBudget below 9 currency units (error code 5005,
 // "Значение поля DailyBudget должно быть в диапазоне от 9 до 1000000000") —
@@ -26,6 +50,7 @@ async function callDirect(
   params: unknown,
   clientLogin?: string,
   accessTokenEnv?: string,
+  apiBase: string = API_BASE,
 ): Promise<unknown> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${getYandexAccessToken(accessTokenEnv)}`,
@@ -34,10 +59,10 @@ async function callDirect(
   };
   if (clientLogin) headers["Client-Login"] = clientLogin;
 
-  const response = await fetch(`${API_BASE}/${resource}`, {
+  const response = await fetch(`${apiBase}/${resource}`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ method, params }),
+    body: encodeRawIds(JSON.stringify({ method, params })),
   });
   // A non-existent resource (e.g. "forecasts" — confirmed dead 2026-08-30,
   // see getForecastCpc) 404s with an EMPTY body, not a JSON error payload
@@ -923,6 +948,77 @@ export async function setCampaignStatus(
   accessTokenEnv?: string,
 ): Promise<void> {
   await callDirect("campaigns", action, { SelectionCriteria: { Ids: [campaignId] } }, clientLogin, accessTokenEnv);
+}
+
+// Same SelectionCriteria.Ids shape as setCampaignStatus above, just on the
+// `ads` resource instead of `campaigns` — verified live 2026-09-10 (probed
+// with a bogus id, API echoed back the expected "must be an integer" shape
+// for SelectionCriteria.Ids, confirming this is the right resource/method).
+export async function setAdStatus(
+  adId: string,
+  action: "resume" | "suspend",
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<void> {
+  const result = (await callDirect(
+    "ads",
+    action,
+    { SelectionCriteria: { Ids: [rawId(adId)] } },
+    clientLogin,
+    accessTokenEnv,
+  )) as {
+    SuspendResults?: ReadonlyArray<{ Errors?: ReadonlyArray<{ Message: string; Details?: string }> }>;
+    ResumeResults?: ReadonlyArray<{ Errors?: ReadonlyArray<{ Message: string; Details?: string }> }>;
+  };
+  // Same "200 OK but the real failure is per-item" shape as
+  // updateResponsiveAdContent above (SuspendResults/ResumeResults[].Errors,
+  // not a top-level `error`) — verified live 2026-09-10.
+  const itemErrors = (result.SuspendResults ?? result.ResumeResults)?.[0]?.Errors;
+  if (itemErrors && itemErrors.length > 0) {
+    throw new Error(`Yandex Direct ads.${action} failed for ad ${adId}: ${JSON.stringify(itemErrors)}`);
+  }
+}
+
+// Replaces the full Titles[]/Texts[] pool of a RESPONSIVE_AD (up to 7
+// titles / 3 texts) — `ads.update` overwrites the whole array per call, so
+// callers must pass the complete desired pool (existing + new), not just
+// the additions, or the previous titles/texts get silently dropped.
+// Real gotcha found 2026-09-10: unlike `ads.get`'s read shape (Titles as
+// [{Title, Status, StatusClarification}, ...]), `ads.update` wants Titles/
+// Texts as plain string arrays — sending the read shape's objects fails
+// with "Элемент массива Ads.ResponsiveAd.Titles должен содержать строку".
+export async function updateResponsiveAdContent(
+  adId: string,
+  content: { readonly titles: readonly string[]; readonly texts: readonly string[] },
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<void> {
+  const result = (await callDirect(
+    "ads",
+    "update",
+    {
+      Ads: [
+        {
+          Id: rawId(adId),
+          ResponsiveAd: {
+            Titles: content.titles,
+            Texts: content.texts,
+          },
+        },
+      ],
+    },
+    clientLogin,
+    accessTokenEnv,
+    API_BASE_V501,
+  )) as { UpdateResults?: ReadonlyArray<{ Errors?: ReadonlyArray<{ Message: string; Details?: string }> }> };
+  // v5/v501 both return HTTP 200 with an empty top-level `error` even when
+  // an individual item failed — the real per-item failure is buried in
+  // UpdateResults[].Errors, which callDirect's generic error check doesn't
+  // see. Surface it here instead of reporting false success.
+  const itemErrors = result.UpdateResults?.[0]?.Errors;
+  if (itemErrors && itemErrors.length > 0) {
+    throw new Error(`Yandex Direct ads.update failed for ad ${adId}: ${JSON.stringify(itemErrors)}`);
+  }
 }
 
 export interface DirectCampaignReportRow {

@@ -602,6 +602,45 @@ export async function getImpressionShareReport(
   });
 }
 
+export interface CampaignBudgetRow {
+  readonly campaignId: string;
+  readonly campaignName: string;
+  readonly dailyBudgetMicros: number;
+  readonly deliveryMethod: string | undefined; // STANDARD | ACCELERATED
+}
+
+// Current (not historical) daily budget per SEARCH campaign — pairs with
+// getImpressionShareReport to tell "budget-constrained" (search_budget_lost
+// high) apart from "rank-constrained" (search_rank_lost high, more budget
+// wouldn't help) apart from "under-spending its own budget with low lost
+// impression share on both" (demand-limited or a bidding-strategy ceiling).
+export async function getCampaignBudgets(
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<readonly CampaignBudgetRow[]> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/googleAds:search",
+    {
+      query: `SELECT campaign.id, campaign.name, campaign_budget.amount_micros, campaign_budget.delivery_method
+              FROM campaign
+              WHERE campaign.status = 'ENABLED' AND campaign.advertising_channel_type = 'SEARCH'`,
+    },
+    options,
+  )) as {
+    results?: ReadonlyArray<{
+      campaign: { id: string; name: string };
+      campaignBudget?: { amountMicros?: number; deliveryMethod?: string };
+    }>;
+  };
+  return (data.results ?? []).map((r) => ({
+    campaignId: r.campaign.id,
+    campaignName: r.campaign.name,
+    dailyBudgetMicros: r.campaignBudget?.amountMicros ?? 0,
+    deliveryMethod: r.campaignBudget?.deliveryMethod,
+  }));
+}
+
 // Creates a real CampaignBudget + Campaign, PAUSED, SEARCH channel type, no
 // ad groups/keywords/ads yet — a real but empty shell. Idempotent per call:
 // if a campaign with the same name already exists, it's reused rather than

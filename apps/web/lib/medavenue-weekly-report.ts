@@ -13,6 +13,9 @@ import { getSupabase, getSupabaseOwnerTenantId } from "./supabase.ts";
 import { syncAdStats } from "./sync-ad-stats.ts";
 import { readRange, writeRange } from "./tools/google-sheets.ts";
 import { sendInternalEmail } from "./tools/email-provider.ts";
+import { resolveAccessContext, type AccessContext } from "./tools/platform-identity.ts";
+import { getWeeklySpendLimit, getDailyBudget } from "./tools/yandex-direct.ts";
+import { getCampaignBudgets, getImpressionShareReport } from "./tools/google-ads.ts";
 
 const MEDAVENUE_CLIENT_ID = "6ff0a928-cc9e-4ad5-ba7d-09fa4eea718d";
 const MEDAVENUE_SHEET_ID = "1Fmh342iE28Bgk9z-2-Ds1LSIQUoiFzcUP3ERICKsawY";
@@ -37,6 +40,7 @@ const HEADER = [
   "Δ Конверсии, %",
   "Δ CPA, %",
   "Комментарий",
+  "Бюджет",
 ] as const;
 
 function isoDate(d: Date): string {
@@ -168,6 +172,111 @@ interface ReportRow {
   readonly values: readonly (string | number)[];
 }
 
+interface BudgetVerdict {
+  readonly verdict: string; // 🔴 упирается / 🟡 недотрачивает / 🟢 в норме / —
+  readonly detail: string;
+}
+
+const BUDGET_HIGH_RATIO = 0.9; // spend/limit at or above this = pinned at budget
+const BUDGET_LOW_RATIO = 0.5; // spend/limit at or below this = meaningfully under-spending
+const LOST_IS_THRESHOLD = 0.1; // 10%+ impression share lost to a single cause is a real signal, not noise
+
+// Yandex has no Impression Share equivalent — the API genuinely can't tell
+// "bids too low" apart from "not enough search volume" the way Google's
+// search_rank_lost/search_budget_lost can. The strategyType hint below is
+// a heuristic (autostrategy ceiling vs plain manual bids), not a hard
+// diagnosis — say so in the cell rather than pretending certainty Yandex's
+// API doesn't give us.
+async function computeYandexBudgetVerdicts(
+  access: AccessContext,
+  campaignIds: readonly string[],
+  weekCost: ReadonlyMap<string, number>,
+): Promise<Map<string, BudgetVerdict>> {
+  const result = new Map<string, BudgetVerdict>();
+  for (const campaignIdStr of campaignIds) {
+    const campaignId = Number(campaignIdStr);
+    const [weekly, daily] = await Promise.all([
+      getWeeklySpendLimit(campaignId, access.externalAccountId, access.credentialRef),
+      getDailyBudget(campaignId, access.externalAccountId, access.credentialRef),
+    ]);
+    const cost = weekCost.get(campaignIdStr) ?? 0;
+    const weeklyLimit =
+      weekly.weeklySpendLimitMicros != null
+        ? weekly.weeklySpendLimitMicros / 1_000_000
+        : daily.dailyBudgetMicros != null
+          ? (daily.dailyBudgetMicros / 1_000_000) * 7
+          : null;
+    if (!weeklyLimit) {
+      result.set(campaignIdStr, { verdict: "—", detail: "нет фиксированного лимита бюджета/недельного лимита" });
+      continue;
+    }
+    const ratio = cost / weeklyLimit;
+    const pct = Math.round(ratio * 100);
+    if (ratio >= BUDGET_HIGH_RATIO) {
+      result.set(campaignIdStr, { verdict: "🔴 упирается в бюджет", detail: `потрачено ${pct}% недельного лимита — можно увеличить бюджет` });
+    } else if (ratio <= BUDGET_LOW_RATIO) {
+      const hint = weekly.strategyType
+        ? `возможно, ограничение автостратегией «${weekly.strategyType}» (не находит трафик по цели)`
+        : "проверить ставки (может, занижены) или объём спроса — Директ не даёт разделить причины напрямую";
+      result.set(campaignIdStr, { verdict: "🟡 недотрачивает", detail: `потрачено ${pct}% лимита — ${hint}` });
+    } else {
+      result.set(campaignIdStr, { verdict: "🟢 в норме", detail: `${pct}% недельного лимита` });
+    }
+  }
+  return result;
+}
+
+async function computeGoogleBudgetVerdicts(
+  access: AccessContext,
+  week: { readonly start: string; readonly end: string },
+  campaignIds: readonly string[],
+  weekCost: ReadonlyMap<string, number>,
+): Promise<Map<string, BudgetVerdict>> {
+  const options = { refreshTokenEnv: access.credentialRef, loginCustomerId: access.managerId ?? undefined };
+  const [budgets, impressionShare] = await Promise.all([
+    getCampaignBudgets(access.externalAccountId, options),
+    getImpressionShareReport(access.externalAccountId, { startDate: week.start, endDate: week.end }, options),
+  ]);
+  const budgetById = new Map(budgets.map((b) => [b.campaignId, Number(b.dailyBudgetMicros)]));
+  const isById = new Map(impressionShare.map((r) => [r.campaignId, r]));
+
+  const result = new Map<string, BudgetVerdict>();
+  for (const campaignIdStr of campaignIds) {
+    const dailyBudgetMicros = budgetById.get(campaignIdStr);
+    if (dailyBudgetMicros === undefined) {
+      result.set(campaignIdStr, { verdict: "—", detail: "бюджет не найден (не SEARCH или архивная кампания)" });
+      continue;
+    }
+    const weeklyBudget = (dailyBudgetMicros / 1_000_000) * 7;
+    const cost = weekCost.get(campaignIdStr) ?? 0;
+    const ratio = weeklyBudget > 0 ? cost / weeklyBudget : 0;
+    const pct = Math.round(ratio * 100);
+    const is = isById.get(campaignIdStr);
+    const budgetLost = is?.searchBudgetLostImpressionShare ?? null;
+    const rankLost = is?.searchRankLostImpressionShare ?? null;
+
+    if (budgetLost !== null && budgetLost >= LOST_IS_THRESHOLD) {
+      result.set(campaignIdStr, {
+        verdict: "🔴 упирается в бюджет",
+        detail: `потеряно ${Math.round(budgetLost * 100)}% показов из-за бюджета (search_budget_lost_impression_share) — можно увеличить бюджет`,
+      });
+    } else if (rankLost !== null && rankLost >= LOST_IS_THRESHOLD) {
+      result.set(campaignIdStr, {
+        verdict: "🟡 упирается в ставку/качество",
+        detail: `потеряно ${Math.round(rankLost * 100)}% показов из-за ставки/рейтинга объявления — бюджет тут не поможет, нужно поднимать ставку или качество`,
+      });
+    } else if (ratio <= BUDGET_LOW_RATIO) {
+      result.set(campaignIdStr, {
+        verdict: "🟡 недотрачивает",
+        detail: `потрачено ${pct}% бюджета, доля показов не упирается ни в бюджет, ни в рейтинг — вероятно, низкий спрос (мало релевантных запросов)`,
+      });
+    } else {
+      result.set(campaignIdStr, { verdict: "🟢 в норме", detail: `${pct}% недельного бюджета` });
+    }
+  }
+  return result;
+}
+
 function buildRows(
   platform: "google-ads" | "yandex-direct",
   period: string,
@@ -175,6 +284,7 @@ function buildRows(
   current: readonly CampaignWeekStat[],
   previous: readonly CampaignWeekStat[],
   logEntries: readonly LogEntry[],
+  budgetVerdicts: ReadonlyMap<string, BudgetVerdict>,
 ): readonly ReportRow[] {
   const prevByCampaign = new Map(previous.map((s) => [s.campaignId, s]));
   return [...current]
@@ -189,6 +299,8 @@ function buildRows(
       const deltaCpa = prev && typeof cpa === "number" ? pctDelta(cpa, prevCpa) : "";
       const matches = matchLogEntries(logEntries, platform, stat.campaignName, weekStart);
       const comment = matches.map((m) => `Правка ${m.date} (${m.changeType})`).join("; ");
+      const budget = budgetVerdicts.get(stat.campaignId);
+      const budgetCell = budget ? `${budget.verdict} — ${budget.detail}` : "—";
       return {
         key: `${period}|${platform}|${stat.campaignName}`,
         values: [
@@ -205,6 +317,7 @@ function buildRows(
           deltaConversions,
           deltaCpa,
           comment,
+          budgetCell,
         ],
       };
     });
@@ -259,7 +372,7 @@ interface VerificationMismatch {
 // comparing written numbers against a second, independent source). A float
 // tolerance of 0.01 absorbs Sheets' own display rounding, not real drift.
 async function verifyRows(tab: string, rows: readonly ReportRow[]): Promise<readonly VerificationMismatch[]> {
-  const sheetRows = await readRange(MEDAVENUE_SHEET_ID, `${tab}!A1:M10000`);
+  const sheetRows = await readRange(MEDAVENUE_SHEET_ID, `${tab}!A1:N10000`);
   const byKey = new Map<string, readonly string[]>();
   sheetRows.forEach((r, i) => {
     if (i === 0 || !r[0] || !r[2]) return;
@@ -324,7 +437,35 @@ export async function runMedavenueWeeklyReport(referenceDate: Date = new Date())
       fetchWeekStats(platform, week),
       fetchWeekStats(platform, prevWeek),
     ]);
-    const rows = buildRows(platform, period, week.start, current, previous, logEntries);
+    const weekCost = new Map(current.map((s) => [s.campaignId, s.cost]));
+    const campaignIds = current.map((s) => s.campaignId);
+
+    // Budget-limiter check (Monday-morning "who's pinned at budget, who's
+    // under-spending and why") — best-effort: a live-API failure here
+    // (rate limit, a campaign type this doesn't handle) shouldn't take
+    // down the whole weekly report, just leave that campaign's cell as
+    // "—" instead of failing the run.
+    let budgetVerdicts = new Map<string, BudgetVerdict>();
+    try {
+      const account = (accounts ?? []).find((a) => a.platform === platform);
+      if (account && campaignIds.length > 0) {
+        const access = await resolveAccessContext(account.id);
+        budgetVerdicts =
+          platform === "yandex-direct"
+            ? await computeYandexBudgetVerdicts(access, campaignIds, weekCost)
+            : await computeGoogleBudgetVerdicts(access, week, campaignIds, weekCost);
+      }
+    } catch (budgetError) {
+      mismatches.push({
+        tab: TAB_BY_PLATFORM[platform],
+        key: `${period}|${platform}|(budget check)`,
+        field: "Бюджет",
+        expected: "вычислено",
+        actual: budgetError instanceof Error ? budgetError.message : String(budgetError),
+      });
+    }
+
+    const rows = buildRows(platform, period, week.start, current, previous, logEntries, budgetVerdicts);
     const tab = TAB_BY_PLATFORM[platform];
     await upsertRows(tab, rows);
     rowsWritten[platform] = rows.length;
