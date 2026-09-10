@@ -177,7 +177,7 @@ function buildRows(
   logEntries: readonly LogEntry[],
 ): readonly ReportRow[] {
   const prevByCampaign = new Map(previous.map((s) => [s.campaignId, s]));
-  return current
+  return [...current]
     .sort((a, b) => b.cost - a.cost)
     .map((stat) => {
       const ctr = stat.impressions > 0 ? round2((stat.clicks / stat.impressions) * 100) : 0;
