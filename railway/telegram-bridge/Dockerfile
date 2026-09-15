@@ -1,7 +1,7 @@
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git tmux curl ca-certificates \
+      git tmux curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Bun is required by the official Claude Code channel plugins (Telegram/Discord/iMessage).
