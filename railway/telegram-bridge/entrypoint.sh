@@ -27,12 +27,12 @@ cat > "$HOME/.claude/settings.json" <<'JSON'
 }
 JSON
 
-# The official marketplace is normally auto-added on first *interactive* launch;
-# a fresh container's first-ever `claude` invocation is this non-interactive
-# install, so it isn't known yet without the extraKnownMarketplaces block above.
-# Idempotent: safe to run on every boot/redeploy.
-claude plugin install telegram@claude-plugins-official --scope user --yes \
-  || echo "[entrypoint] plugin install did not confirm success — check with: railway run claude plugin list"
+# No standalone `claude plugin install` here: the official marketplace is only
+# auto-registered by a normal interactive launch, and a bare `claude plugin
+# install` as the container's very first-ever invocation fails with "not found
+# in marketplace" because that registration hasn't happened yet. Declaring the
+# plugin in enabledPlugins above is enough — the long-running `claude
+# --channels` session below picks it up once its own interactive startup runs.
 
 mkdir -p "$HOME/.claude/channels/telegram"
 printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN" > "$HOME/.claude/channels/telegram/.env"
@@ -49,16 +49,23 @@ tmux new-session -d -s claude -x 220 -y 50 \
 tmux pipe-pane -o -t claude "cat >> $LOG"
 
 # First-ever launch in a fresh container shows Claude Code's interactive
-# first-run wizard (theme choice, trust dialog) and blocks waiting for a
-# keypress. Nobody is attached to answer it, so accept the highlighted
-# default a few times, spaced out to cover whichever screens actually
-# appear. Harmless no-op once onboarding is already complete (settings
-# persist under ~/.claude for the life of this container).
+# first-run wizard and blocks waiting for a keypress nobody is attached to
+# give it. Two screens matter:
+#   1. Theme picker — a default is already highlighted, plain Enter accepts it.
+#   2. "Detected a custom API key ... use this API key?" — defaults to
+#      "No (recommended)", which pushes into a browser OAuth login flow that
+#      can't work in this headless container. Must move the selection up to
+#      "Yes" before confirming, or the whole thing wedges waiting on OAuth.
+# Harmless no-op on later restarts once onboarding is already complete
+# (settings persist under ~/.claude for the life of this container).
 (
-  for i in 1 2 3 4 5; do
-    sleep 3
-    tmux send-keys -t claude Enter 2>/dev/null || true
-  done
+  sleep 4
+  tmux send-keys -t claude Enter        # theme picker: accept default
+  sleep 3
+  tmux send-keys -t claude Up           # API key prompt: move off "No" ...
+  tmux send-keys -t claude Enter        # ... onto "Yes", then confirm
+  sleep 3
+  tmux send-keys -t claude Enter 2>/dev/null || true   # any trailing dialog (e.g. trust)
 ) &
 
 exec tail -f "$LOG"
