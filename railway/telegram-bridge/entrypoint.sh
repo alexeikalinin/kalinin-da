@@ -23,7 +23,7 @@ cat > "$HOME/.claude/settings.json" <<'JSON'
       "source": { "source": "github", "repo": "anthropics/claude-plugins-official" }
     }
   },
-  "enabledPlugins": ["telegram@claude-plugins-official"]
+  "enabledPlugins": { "telegram@claude-plugins-official": true }
 }
 JSON
 
@@ -59,6 +59,10 @@ tmux pipe-pane -o -t claude "cat >> $LOG"
 #   4. Folder trust check — defaults to "No, exit" (would make Claude quit
 #      immediately, and the while-loop would just hit this same screen
 #      forever). Move up to "Yes, I trust this folder" before confirming.
+#   5. This repo's committed .mcp.json declares project MCP servers
+#      (design-tooling, unrelated to the Telegram bridge) — Claude Code asks
+#      whether to enable them. Reject with Escape to keep this bot's
+#      permission surface limited to what the bridge actually needs.
 # Harmless no-op on later restarts once onboarding is already complete
 # (settings persist under ~/.claude for the life of this container).
 (
@@ -73,7 +77,7 @@ tmux pipe-pane -o -t claude "cat >> $LOG"
   tmux send-keys -t claude Up           # folder trust: move off "No, exit" ...
   tmux send-keys -t claude Enter        # ... onto "Yes, I trust this folder"
   sleep 3
-  tmux send-keys -t claude Enter 2>/dev/null || true   # any trailing dialog
+  tmux send-keys -t claude Escape 2>/dev/null || true   # reject project MCP servers, if asked
 ) &
 
 exec tail -f "$LOG"
