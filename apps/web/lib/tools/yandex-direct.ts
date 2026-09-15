@@ -1021,6 +1021,49 @@ export async function updateResponsiveAdContent(
   }
 }
 
+// Attaches existing callout extensions ("уточнения") to a RESPONSIVE_AD —
+// found 2026-09-15 the hard way: `ads.update`'s `ResponsiveAd.AdExtensions`
+// (the same shape `ads.get` returns) is read-only and rejected outright as
+// "неизвестный параметр" on both v5 and v501. The real write path is
+// `ResponsiveAd.CalloutSetting.AdExtensions`, an array of
+// `{AdExtensionId, Operation}` where Operation is "SET"/"ADD"/"REMOVE" —
+// undocumented-by-trial-and-error, confirmed working by reading the ad
+// back afterward. Callout extension objects themselves are created once
+// via `adextensions.add` (method not wrapped here yet — this account
+// already has a reusable pool of ~23 generic ones, see
+// project_medavenue_client_setup memory) and can be shared across many
+// ads/campaigns, same reusability model as sitelink sets.
+export async function setAdCallouts(
+  adId: string,
+  calloutExtensionIds: readonly number[],
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<void> {
+  const result = (await callDirect(
+    "ads",
+    "update",
+    {
+      Ads: [
+        {
+          Id: rawId(adId),
+          ResponsiveAd: {
+            CalloutSetting: {
+              AdExtensions: calloutExtensionIds.map((AdExtensionId) => ({ AdExtensionId, Operation: "SET" })),
+            },
+          },
+        },
+      ],
+    },
+    clientLogin,
+    accessTokenEnv,
+    API_BASE_V501,
+  )) as { UpdateResults?: ReadonlyArray<{ Errors?: ReadonlyArray<{ Message: string; Details?: string }> }> };
+  const itemErrors = result.UpdateResults?.[0]?.Errors;
+  if (itemErrors && itemErrors.length > 0) {
+    throw new Error(`Yandex Direct ads.update (callouts) failed for ad ${adId}: ${JSON.stringify(itemErrors)}`);
+  }
+}
+
 export interface DirectCampaignReportRow {
   readonly campaignId: string;
   readonly campaignName: string;

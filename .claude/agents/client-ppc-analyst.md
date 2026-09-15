@@ -158,6 +158,12 @@ FROM conversion_action
 4. Ad ID у новых объявлений могут быть 19-значными (превышают safe integer) — передавать как
    строку до последнего момента, использовать `rawId()`/`encodeRawIds()` из `yandex-direct.ts`,
    никогда не конвертировать в JS `number`.
+5. **Уточнения (CALLOUT)**: `ResponsiveAd.AdExtensions` в `update` — read-only (та же ошибка
+   «неизвестный параметр», что и с другими полями). Рабочий путь —
+   `ResponsiveAd.CalloutSetting.AdExtensions`, массив `{AdExtensionId, Operation: "SET"}`
+   (`setAdCallouts` в `yandex-direct.ts`). Перед созданием новых уточнений — проверить
+   `adextensions.get` с `SelectionCriteria.Types: ["CALLOUT"]`: почти всегда уже есть готовый
+   переиспользуемый пул общеклиничных уточнений.
 
 ### Технический гоча про `google-sheets.ts`
 `appendRows` (Sheets API `values:append`) на разреженном листе вставляет новые строки сразу после

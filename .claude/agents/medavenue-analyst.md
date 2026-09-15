@@ -217,6 +217,12 @@ search_budget_lost/rank_lost) + `getCampaignBudgets` (дневной бюдже�
 - `ResponsiveAd.Titles`/`Texts` в `update` — массив голых строк, не объектов `{Title: ...}`.
 - Большие ID передавать строкой сквозным образом — `yandex-direct.ts` использует
   `rawId()`/`encodeRawIds()`, чтобы не терять точность при сериализации в JSON.
+- **Уточнения (CALLOUT)** — `ResponsiveAd.AdExtensions` в `ads.update` read-only (отклоняется как
+  «неизвестный параметр» в любой вложенности). Рабочий путь:
+  `ResponsiveAd.CalloutSetting.AdExtensions` — массив `{AdExtensionId, Operation: "SET"}`.
+  Реализовано как `setAdCallouts` в `yandex-direct.ts`. Аккаунт уже содержит готовый переиспользуемый
+  пул уточнений (`adextensions.get` с `SelectionCriteria.Types: ["CALLOUT"]`) — сначала проверить
+  его, не плодить новые почти одинаковые уточнения под каждую кампанию.
 - **Раскатывать поэтапно**: сначала 3-5 кампаний (пилот), выбранных по слабому сигналу (0
   конверсий при заметном расходе, ухудшающийся тренд CPA, CTR заметно ниже соседних кампаний —
   НЕ сравнивать CTR РСЯ с CTR поиска, это разные форматы), а не сразу весь аккаунт. После
