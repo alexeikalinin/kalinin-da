@@ -27,16 +27,16 @@ cat > "$HOME/.claude/settings.json" <<'JSON'
 }
 JSON
 
-# enabledPlugins above only *declares* the plugin — it does not actually fetch
-# and install it (confirmed live: `claude plugin list` said "No plugins
-# installed" even with enabledPlugins set). A real `claude plugin install` is
-# still required. This only works now because extraKnownMarketplaces was
-# already written above — without it, this exact command fails with "not
-# found in marketplace" on a container's first-ever claude invocation, since
-# the official marketplace is otherwise only auto-registered by a normal
-# interactive launch. Idempotent: safe to run on every boot/redeploy.
-claude plugin install telegram@claude-plugins-official --scope user --yes \
-  || echo "[entrypoint] plugin install did not confirm success — check with: railway ssh -- claude plugin list"
+# enabledPlugins above only *declares* the plugin — it does not fetch and
+# install it (confirmed live: `claude plugin list` said "No plugins
+# installed" even with enabledPlugins set). A real `claude plugin install`
+# is required, but it can only succeed AFTER the official marketplace has
+# been registered — and that registration itself only happens once a normal
+# interactive `claude` session completes its first-run onboarding.
+# extraKnownMarketplaces above does not substitute for this: confirmed live
+# that `claude plugin install` still fails with "not found in marketplace"
+# when run before onboarding, even with extraKnownMarketplaces set. So the
+# install call is deferred below, after the onboarding auto-accept sequence.
 
 mkdir -p "$HOME/.claude/channels/telegram"
 printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN" > "$HOME/.claude/channels/telegram/.env"
@@ -82,6 +82,26 @@ tmux pipe-pane -o -t claude "cat >> $LOG"
   tmux send-keys -t claude Enter        # ... onto "Yes, I trust this folder"
   sleep 3
   tmux send-keys -t claude Escape 2>/dev/null || true   # reject project MCP servers, if asked
+  sleep 2
+
+  # Only now — after onboarding registered the official marketplace — can the
+  # plugin actually install. Skip entirely if a previous boot already did this
+  # (persists under ~/.claude for the life of this container).
+  if ! claude plugin list 2>/dev/null | grep -q "telegram@claude-plugins-official"; then
+    claude plugin install telegram@claude-plugins-official --scope user --yes \
+      || echo "[entrypoint] plugin install did not confirm success — check with: railway ssh -- claude plugin list"
+    # The already-running interactive session printed "plugin not installed"
+    # at its own startup and won't notice the plugin appearing mid-session —
+    # restart it so the next launch picks it up.
+    tmux kill-session -t claude 2>/dev/null || true
+    tmux new-session -d -s claude -x 220 -y 50 \
+      "cd /repo && while true; do claude --channels plugin:telegram@claude-plugins-official; echo '[entrypoint] claude exited, restarting in 5s'; sleep 5; done"
+    tmux pipe-pane -o -t claude "cat >> $LOG"
+    # Theme/trust/API-key choices persist across launches, but the project
+    # MCP servers prompt does not — this second launch asks again.
+    sleep 4
+    tmux send-keys -t claude Escape 2>/dev/null || true
+  fi
 ) &
 
 exec tail -f "$LOG"
