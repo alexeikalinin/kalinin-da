@@ -45,7 +45,7 @@ You need the [Railway CLI](https://docs.railway.com/guides/cli) locally for this
 npm i -g @railway/cli
 railway login
 railway link            # pick this project/service
-railway run tmux attach -t claude
+railway ssh -- tmux attach -t claude
 ```
 
 Then, in Telegram:
@@ -67,9 +67,9 @@ a tool that needs approval, you'll get the same prompt in Telegram with buttons
 ## If something goes wrong
 
 - `railway logs` — shows the piped tmux output (`/tmp/claude-session.log`).
-- `railway run claude plugin list` — confirms the Telegram plugin installed.
-- `railway run tmux attach -t claude` — attach to the live session directly,
+- `railway ssh -- claude plugin list` — confirms the Telegram plugin installed.
+- `railway ssh -- tmux attach -t claude` — attach to the live session directly,
   same as during pairing, for any manual troubleshooting.
 - Bot not responding: confirm `claude --channels plugin:telegram@claude-plugins-official`
-  is the process actually running (`railway run tmux attach -t claude` and look
+  is the process actually running (`railway ssh -- tmux attach -t claude` and look
   at the top of the pane for the channels startup banner).

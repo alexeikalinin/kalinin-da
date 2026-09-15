@@ -27,12 +27,16 @@ cat > "$HOME/.claude/settings.json" <<'JSON'
 }
 JSON
 
-# No standalone `claude plugin install` here: the official marketplace is only
-# auto-registered by a normal interactive launch, and a bare `claude plugin
-# install` as the container's very first-ever invocation fails with "not found
-# in marketplace" because that registration hasn't happened yet. Declaring the
-# plugin in enabledPlugins above is enough — the long-running `claude
-# --channels` session below picks it up once its own interactive startup runs.
+# enabledPlugins above only *declares* the plugin — it does not actually fetch
+# and install it (confirmed live: `claude plugin list` said "No plugins
+# installed" even with enabledPlugins set). A real `claude plugin install` is
+# still required. This only works now because extraKnownMarketplaces was
+# already written above — without it, this exact command fails with "not
+# found in marketplace" on a container's first-ever claude invocation, since
+# the official marketplace is otherwise only auto-registered by a normal
+# interactive launch. Idempotent: safe to run on every boot/redeploy.
+claude plugin install telegram@claude-plugins-official --scope user --yes \
+  || echo "[entrypoint] plugin install did not confirm success — check with: railway ssh -- claude plugin list"
 
 mkdir -p "$HOME/.claude/channels/telegram"
 printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN" > "$HOME/.claude/channels/telegram/.env"
