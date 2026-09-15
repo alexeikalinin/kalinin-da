@@ -50,12 +50,15 @@ tmux pipe-pane -o -t claude "cat >> $LOG"
 
 # First-ever launch in a fresh container shows Claude Code's interactive
 # first-run wizard and blocks waiting for a keypress nobody is attached to
-# give it. Two screens matter:
+# give it. Screens observed, in order, and their non-default traps:
 #   1. Theme picker — a default is already highlighted, plain Enter accepts it.
 #   2. "Detected a custom API key ... use this API key?" — defaults to
 #      "No (recommended)", which pushes into a browser OAuth login flow that
-#      can't work in this headless container. Must move the selection up to
-#      "Yes" before confirming, or the whole thing wedges waiting on OAuth.
+#      can't work headlessly. Move up to "Yes" before confirming.
+#   3. Security notes — plain "Press Enter to continue".
+#   4. Folder trust check — defaults to "No, exit" (would make Claude quit
+#      immediately, and the while-loop would just hit this same screen
+#      forever). Move up to "Yes, I trust this folder" before confirming.
 # Harmless no-op on later restarts once onboarding is already complete
 # (settings persist under ~/.claude for the life of this container).
 (
@@ -65,7 +68,12 @@ tmux pipe-pane -o -t claude "cat >> $LOG"
   tmux send-keys -t claude Up           # API key prompt: move off "No" ...
   tmux send-keys -t claude Enter        # ... onto "Yes", then confirm
   sleep 3
-  tmux send-keys -t claude Enter 2>/dev/null || true   # any trailing dialog (e.g. trust)
+  tmux send-keys -t claude Enter        # security notes: continue
+  sleep 2
+  tmux send-keys -t claude Up           # folder trust: move off "No, exit" ...
+  tmux send-keys -t claude Enter        # ... onto "Yes, I trust this folder"
+  sleep 3
+  tmux send-keys -t claude Enter 2>/dev/null || true   # any trailing dialog
 ) &
 
 exec tail -f "$LOG"
