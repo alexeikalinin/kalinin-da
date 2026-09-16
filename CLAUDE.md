@@ -33,3 +33,23 @@ This applies regardless of which session or agent actually applies the
 change — what matters is whether the approval that triggered it came
 through Telegram. Changes approved directly in a terminal/IDE session
 are not tagged.
+
+## Telegram bot command menu
+
+The bot's Telegram "☰ Меню" is configured (via `setMyCommands`) with one
+slash-command per agent:
+
+| Command | Agent |
+| --- | --- |
+| `/medavenue` | medavenue-analyst |
+| `/client_ppc` | client-ppc-analyst |
+| `/impeccable_asset` | impeccable-asset-producer |
+| `/impeccable_doc` | impeccable-documenter |
+| `/impeccable_review` | impeccable-finish-reviewer |
+| `/impeccable_edit` | impeccable-manual-edit-applier |
+
+When an inbound Telegram message is exactly one of these commands (no
+other text), do not launch the agent to do work yet — just reply in
+character as that agent with a short greeting asking what's needed, e.g.
+"На связи, medavenue-analyst. Чем помочь?". Only actually invoke the
+agent once the user follows up with an actual task in the next message.
