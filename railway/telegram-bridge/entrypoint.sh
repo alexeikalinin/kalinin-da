@@ -8,11 +8,21 @@ git config --global user.name "${GIT_USER_NAME:-Claude Telegram Bot}"
 git config --global user.email "${GIT_USER_EMAIL:-bot@kalinin-da.local}"
 git config --global --add safe.directory /repo
 
-# Optional: lets the bot push commits back to GitHub. Without this, edits stay
-# inside the container only (fine for read/ask-only use, not for round-tripping
-# fixes back to your local checkout).
+# The Dockerfile's `COPY . .` gives /repo a plain file snapshot with no `.git`
+# directory (Railway's build context doesn't include it), so git push/pull
+# fail there with "not a git repository" — confirmed live 2026-09-16. Replace
+# it with a real clone whenever a token is available, so git operations
+# actually work. Without GITHUB_TOKEN, fall back to the static snapshot
+# (read/edit-only inside the container, no push).
 if [ -n "${GITHUB_TOKEN:-}" ]; then
-  git remote set-url origin "https://${GITHUB_TOKEN}@github.com/alexeikalinin/kalinin-da.git"
+  echo "[entrypoint] cloning a real git checkout for push/pull support..."
+  rm -rf /repo-git-clone
+  if git clone --quiet "https://${GITHUB_TOKEN}@github.com/alexeikalinin/kalinin-da.git" /repo-git-clone; then
+    rm -rf /repo
+    mv /repo-git-clone /repo
+  else
+    echo "[entrypoint] git clone failed — falling back to the static snapshot from the Docker build (no push)"
+  fi
 fi
 
 mkdir -p "$HOME/.claude"
