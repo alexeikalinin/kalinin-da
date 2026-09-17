@@ -318,3 +318,44 @@ JS `number` в любом месте (параметр функции, `JSON.str
 Яндекс.Директа (не только объявлений), должен либо использовать эти
 хелперы, либо держать ID строкой до последнего момента.
 `BiddingStrategy`-форма не смоделирована и не проверена.
+
+## 9. Большие ID теряют точность и на ЧТЕНИИ ответа, не только на записи —
+найдено 2026-09-15 при сборке черновика кампании «Терапевт»
+
+`rawId()`/`encodeRawIds()` (issue 8 выше) защищают только ИСХОДЯЩИЙ JSON.
+`callDirect` до этого момента парсил ответ голым `JSON.parse(text)` —
+19-значный `Id`, который Яндекс возвращает в ответе на `ads.add`
+(например), проходит тот же IEEE-754 round-off, что и на входе. Поймано
+живьём: `createResponsiveAd` вернул `1921455957130277600`, а реальный ID
+созданного объявления (перепроверено отдельным `ads.get`) —
+`1921455957130277614` — расхождение на 14 в последних цифрах,
+достаточное, чтобы следующий `attachSitelinkSet` упал с «Объявление не
+найдено» (`Code: 8800`).
+
+Фикс — `callDirect` теперь квотирует любое 16+-значное голое число в
+ТЕКСТЕ ответа перед `JSON.parse` (тот же паттерн `replace(/:(-?\d{16,})
+([,}\]])/g, ':"$1"$2')`, что раньше применялся только вручную в
+разовых verify-скриптах). `createResponsiveAd` соответственно теперь
+возвращает `Promise<string>`, а не `Promise<number>` — любая функция,
+читающая `Id` объявления из ответа `ads.add`/`ads.get`, должна делать то
+же самое, иначе округление вернётся снова.
+
+Заодно нашлась вторая, независимая дыра: `createOrReusePausedCampaign`
+не принимал `accessTokenEnv` вообще — всегда бил в дефолтный
+`YANDEX_ACCESS_TOKEN` (single-tenant), даже когда вызывающий код явно
+работал в agency-режиме с `clientLogin`. Для Медавеню (агентский логин
+`porg-yw2ynqgs`, токен `YANDEX_AGENCY_ACCESS_TOKEN`, отличается от
+`YANDEX_ACCESS_TOKEN`) это означало бы создание кампании не в том
+аккаунте либо ошибку авторизации. Добавлен пятый параметр
+`accessTokenEnv?: string`, прокинут во все три внутренних вызова
+(`listCampaigns`, `campaigns.add`, `campaigns.suspend`).
+
+Новые reusable-функции, добавленные этой же сессией для полной сборки
+черновика кампании с нуля (Campaign → AdGroup → Keywords → RESPONSIVE_AD
+→ Sitelinks → Callouts), все в `yandex-direct.ts`:
+- `createResponsiveAd(adGroupId, {titles, texts}, finalUrl, clientLogin?, accessTokenEnv?)` —
+  `ads.add` на v501 (тот же v501-гоча, что и `ads.update` для этого типа объявлений).
+- `createSitelinkSet(sitelinks, clientLogin?, accessTokenEnv?)` — `sitelinks.add`, обычный v5,
+  без сюрпризов с ID (SitelinksSetId в этом аккаунте помещался в 10 цифр).
+- `attachSitelinkSet(adId, sitelinkSetId, clientLogin?, accessTokenEnv?)` — `ads.update` на
+  v501, `ResponsiveAd.SitelinkSetId`.
