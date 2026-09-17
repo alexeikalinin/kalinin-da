@@ -33,9 +33,25 @@ cat > "$HOME/.claude/settings.json" <<'JSON'
       "source": { "source": "github", "repo": "anthropics/claude-plugins-official" }
     }
   },
-  "enabledPlugins": { "telegram@claude-plugins-official": true }
+  "enabledPlugins": { "telegram@claude-plugins-official": true },
+  "permissions": {
+    "defaultMode": "auto",
+    "ask": ["Bash(git commit:*)", "Bash(git push:*)"]
+  }
 }
 JSON
+# defaultMode "auto" hands routine Bash/read approvals to Claude Code's own
+# safety classifier instead of prompting the paired human for every single
+# command — confirmed live 2026-09-17 that a plain read-only audit was
+# generating a permission prompt per curl/bash call, which is unusable over
+# Telegram. The explicit "ask" rules force a real prompt for git
+# commit/push regardless of auto mode (auto mode still honors ask rules —
+# see code.claude.com/docs/en/permission-modes#actions-no-mode-auto-approves)
+# so the "writes need your explicit go-ahead" rule from CLAUDE.md still
+# holds for the one class of action with a clean, matchable command pattern.
+# Actual ad-account writes (Yandex/Google API calls) aren't gated this way —
+# they rely on the agent definitions' own discipline (propose in "Лог
+# правок", wait to be told to apply) same as before this change.
 
 # enabledPlugins above only *declares* the plugin — it does not fetch and
 # install it (confirmed live: `claude plugin list` said "No plugins
