@@ -73,7 +73,17 @@ async function callDirect(
   if (!response.ok) {
     throw new Error(`Yandex Direct API call failed: ${response.status} ${text || "(empty body)"}`);
   }
-  const data = text ? (JSON.parse(text) as { error?: unknown; result?: unknown }) : {};
+  // Mirror of encodeRawIds for the OTHER direction: a response can carry a
+  // freshly-created ad's Id as a 19-digit bare integer, which
+  // JSON.parse silently rounds via the same IEEE-754 precision loss
+  // documented on rawId() above (found for real 2026-09-15, building the
+  // Терапевт campaign — createResponsiveAd's own return value collided
+  // with a different ad's id). Quote any 16+ digit bare integer before
+  // parsing so callers see the exact string; readers that need it as a
+  // number (small ids like campaign/ad group ids never hit this range)
+  // are unaffected.
+  const safeText = text.replace(/:(-?\d{16,})([,}\]])/g, ':"$1"$2');
+  const data = safeText ? (JSON.parse(safeText) as { error?: unknown; result?: unknown }) : {};
   if (data.error) {
     throw new Error(`Yandex Direct API call failed: ${JSON.stringify(data.error)}`);
   }
@@ -85,6 +95,24 @@ export interface DirectCampaign {
   readonly Name: string;
   readonly Status: string;
   readonly State: string;
+  readonly Type: string;
+}
+
+export interface DirectAgencyClient {
+  readonly Login: string;
+  readonly ClientId: string;
+  readonly ClientInfo: string;
+  readonly Currency: string;
+  readonly Archived: string;
+  readonly Type: string;
+}
+
+export interface DirectFeed {
+  readonly Id: number;
+  readonly Name: string;
+  readonly Url: string;
+  readonly RefreshInterval: string;
+  readonly BusinessType: string;
 }
 
 // ---------------------------------------------------------------------
@@ -331,11 +359,42 @@ export async function listCampaigns(clientLogin?: string, accessTokenEnv?: strin
   const result = (await callDirect(
     "campaigns",
     "get",
-    { SelectionCriteria: {}, FieldNames: ["Id", "Name", "Status", "State"] },
+    { SelectionCriteria: {}, FieldNames: ["Id", "Name", "Status", "State", "Type"] },
     clientLogin,
     accessTokenEnv,
   )) as { Campaigns: DirectCampaign[] };
   return result.Campaigns ?? [];
+}
+
+// Lists every client under an agency login — requires an agency-scoped
+// token (YANDEX_AGENCY_ACCESS_TOKEN); a personal token has no agencyclients
+// of its own and this returns an empty/error result. This is how an agency
+// session finds a client's Login before calling any other function here
+// with that clientLogin (getAccountCurrency, listCampaigns, etc. all take
+// clientLogin as their agency-mode identifier).
+export async function listAgencyClients(accessTokenEnv?: string): Promise<readonly DirectAgencyClient[]> {
+  const result = (await callDirect(
+    "agencyclients",
+    "get",
+    { SelectionCriteria: {}, FieldNames: ["Login", "ClientId", "ClientInfo", "Currency", "Archived", "Type"] },
+    undefined,
+    accessTokenEnv,
+  )) as { Clients: DirectAgencyClient[] };
+  return result.Clients ?? [];
+}
+
+// Product feeds (used by Smart/Dynamic campaigns) — a client's feed
+// registration, not a campaign. clientLogin is required in agency mode
+// (same Client-Login header convention as every other function here).
+export async function listFeeds(clientLogin?: string, accessTokenEnv?: string): Promise<readonly DirectFeed[]> {
+  const result = (await callDirect(
+    "feeds",
+    "get",
+    { SelectionCriteria: {}, FieldNames: ["Id", "Name", "Url", "RefreshInterval", "BusinessType"] },
+    clientLogin,
+    accessTokenEnv,
+  )) as { Feeds: DirectFeed[] };
+  return result.Feeds ?? [];
 }
 
 // Creates a real campaign (TextCampaign by default; see
@@ -347,8 +406,9 @@ export async function createOrReusePausedCampaign(
   budgetShare: number,
   clientLogin?: string,
   options?: YandexCampaignTypeOptions,
+  accessTokenEnv?: string,
 ): Promise<{ readonly campaignId: number; readonly reused: boolean }> {
-  const existing = await listCampaigns(clientLogin);
+  const existing = await listCampaigns(clientLogin, accessTokenEnv);
   const match = existing.find((c) => c.Name === name);
   if (match) return { campaignId: match.Id, reused: true };
 
@@ -394,6 +454,7 @@ export async function createOrReusePausedCampaign(
       ],
     },
     clientLogin,
+    accessTokenEnv,
   )) as { AddResults: ReadonlyArray<{ Id?: number; Errors?: unknown[] }> };
 
   const added = addResult.AddResults[0];
@@ -401,7 +462,7 @@ export async function createOrReusePausedCampaign(
     throw new Error(`Yandex Direct campaign creation failed: ${JSON.stringify(added?.Errors)}`);
   }
 
-  await callDirect("campaigns", "suspend", { SelectionCriteria: { Ids: [added.Id] } }, clientLogin);
+  await callDirect("campaigns", "suspend", { SelectionCriteria: { Ids: [added.Id] } }, clientLogin, accessTokenEnv);
 
   return { campaignId: added.Id, reused: false };
 }
@@ -544,6 +605,52 @@ export async function createTextAd(
   const added = result.AddResults[0];
   if (!added?.Id) {
     throw new Error(`Yandex Direct ad creation failed: ${JSON.stringify(added?.Errors)}`);
+  }
+  return added.Id;
+}
+
+export interface DirectResponsiveAdCopy {
+  readonly titles: readonly string[]; // up to 7
+  readonly texts: readonly string[]; // up to 3
+}
+
+// Creates a combinatorial RESPONSIVE_AD (the format every real campaign in
+// this account actually uses — see updateResponsiveAdContent's comment for
+// why createTextAd's classic TextAd shape doesn't match production
+// reality). `ads.add` for this ad type has the same v501 requirement as
+// `ads.update` — confirmed live 2026-09-15, v5 rejects it with the same
+// "не поддерживается в v5, используйте v501" error found for update.
+export async function createResponsiveAd(
+  adGroupId: number,
+  copy: DirectResponsiveAdCopy,
+  finalUrl: string,
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<string> {
+  if (copy.titles.length === 0 || copy.titles.length > 7) {
+    throw new Error(`Yandex Direct ResponsiveAd needs 1-7 titles, got ${copy.titles.length}`);
+  }
+  if (copy.texts.length === 0 || copy.texts.length > 3) {
+    throw new Error(`Yandex Direct ResponsiveAd needs 1-3 texts, got ${copy.texts.length}`);
+  }
+  const result = (await callDirect(
+    "ads",
+    "add",
+    {
+      Ads: [
+        {
+          AdGroupId: adGroupId,
+          ResponsiveAd: { Titles: copy.titles, Texts: copy.texts, Href: finalUrl },
+        },
+      ],
+    },
+    clientLogin,
+    accessTokenEnv,
+    API_BASE_V501,
+  )) as { AddResults: ReadonlyArray<{ Id?: string; Errors?: unknown[] }> };
+  const added = result.AddResults[0];
+  if (!added?.Id) {
+    throw new Error(`Yandex Direct ResponsiveAd creation failed: ${JSON.stringify(added?.Errors)}`);
   }
   return added.Id;
 }
@@ -1061,6 +1168,71 @@ export async function setAdCallouts(
   const itemErrors = result.UpdateResults?.[0]?.Errors;
   if (itemErrors && itemErrors.length > 0) {
     throw new Error(`Yandex Direct ads.update (callouts) failed for ad ${adId}: ${JSON.stringify(itemErrors)}`);
+  }
+}
+
+export interface DirectSitelink {
+  readonly title: string; // ≤30 chars
+  readonly href: string;
+  readonly description?: string; // ≤60 chars
+}
+
+// Creates a reusable sitelink set via `sitelinks.add` — same resource used
+// for the Онкология campaign fix (2026-09-15). Standard v5, no big-int/v501
+// quirks observed for this resource. Returns the new SitelinksSetId, to be
+// attached to one or more ads via attachSitelinkSet.
+export async function createSitelinkSet(
+  sitelinks: readonly DirectSitelink[],
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<number> {
+  if (sitelinks.length < 2 || sitelinks.length > 8) {
+    throw new Error(`Yandex Direct sitelink set needs 2-8 sitelinks, got ${sitelinks.length}`);
+  }
+  const result = (await callDirect(
+    "sitelinks",
+    "add",
+    {
+      SitelinksSets: [
+        {
+          Sitelinks: sitelinks.map((s) => ({
+            Title: s.title,
+            Href: s.href,
+            ...(s.description ? { Description: s.description } : {}),
+          })),
+        },
+      ],
+    },
+    clientLogin,
+    accessTokenEnv,
+  )) as { AddResults: ReadonlyArray<{ Id?: number; Errors?: unknown[] }> };
+  const added = result.AddResults[0];
+  if (!added?.Id) {
+    throw new Error(`Yandex Direct sitelink set creation failed: ${JSON.stringify(added?.Errors)}`);
+  }
+  return added.Id;
+}
+
+// Attaches an existing sitelink set to a RESPONSIVE_AD via
+// `ResponsiveAd.SitelinkSetId` on `ads.update` — same v501 requirement as
+// the ad's own content/callouts, same per-item error shape.
+export async function attachSitelinkSet(
+  adId: string,
+  sitelinkSetId: number,
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<void> {
+  const result = (await callDirect(
+    "ads",
+    "update",
+    { Ads: [{ Id: rawId(adId), ResponsiveAd: { SitelinkSetId: sitelinkSetId } }] },
+    clientLogin,
+    accessTokenEnv,
+    API_BASE_V501,
+  )) as { UpdateResults?: ReadonlyArray<{ Errors?: ReadonlyArray<{ Message: string; Details?: string }> }> };
+  const itemErrors = result.UpdateResults?.[0]?.Errors;
+  if (itemErrors && itemErrors.length > 0) {
+    throw new Error(`Yandex Direct ads.update (sitelinks) failed for ad ${adId}: ${JSON.stringify(itemErrors)}`);
   }
 }
 
