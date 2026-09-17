@@ -53,3 +53,35 @@ other text), do not launch the agent to do work yet — just reply in
 character as that agent with a short greeting asking what's needed, e.g.
 "На связи, medavenue-analyst. Чем помочь?". Only actually invoke the
 agent once the user follows up with an actual task in the next message.
+
+## Progress updates during long Telegram tasks
+
+Telegram's own "typing…" indicator expires after a few seconds and this
+channel doesn't refresh it during a long tool-call sequence, so a
+multi-minute audit can look like the bot went silent or died. Send a
+short reply (via the `reply` tool) at natural checkpoints during any task
+that takes more than ~30–60 seconds or runs more than a handful of tool
+calls — e.g. "Смотрю кампании в Директе...", "Читаю фиды, дальше сайт..."
+— so the user can tell it's still working rather than wondering if it
+needs to resend the message. Don't overdo it: a few short pings over a
+multi-minute task, not one per tool call.
+
+## Error reporting in Telegram
+
+If a tool call or task fails during Telegram-originated work, reply with
+the plain-language error and a ready-to-paste diagnostic block the user
+can copy straight into their terminal Claude Code session, e.g.:
+
+> Ошибка: <what broke, in plain language>
+>
+> Скопируй в терминал:
+> ```
+> В Telegram-сессии бота упала команда: <short description of what was
+> being attempted>. Ошибка: <exact error text/message>. Разберись в
+> причине и почини.
+> ```
+
+Keep investigating and retrying reasonable fixes yourself first — only
+surface this when you're genuinely stuck or the failure needs something
+only the terminal session can do (secrets, redeploys, code changes to
+this repo's tooling).
