@@ -98,3 +98,43 @@ Keep investigating and retrying reasonable fixes yourself first — only
 surface this when you're genuinely stuck or the failure needs something
 only the terminal session can do (secrets, redeploys, code changes to
 this repo's tooling).
+
+## Logging activity so the terminal session can catch up
+
+The Telegram bridge and the user's terminal/IDE session are separate
+Claude Code processes with no shared context. After anything worth
+knowing about later — a question answered, a decision made, a change
+applied, an error hit — write a short row to Supabase so a terminal
+session can catch up without re-reading the whole conversation:
+
+```sql
+insert into telegram_activity_log (tenant_id, client_name, summary, detail)
+values ('51665a3a-2b26-473d-bd9c-e98a98cacba8', '<client or null>', '<one-line summary>', '<jsonb with any useful detail>');
+```
+
+Use the Supabase tools/`SUPABASE_URL`+`SUPABASE_SERVICE_ROLE_KEY` already
+in this environment. One row per meaningful thing, not per message — a
+whole audit can be one row summarizing the outcome, not one per tool
+call. The terminal session reads this table (ordered by `created_at
+desc`) to catch up — see [[feedback_ask_about_telegram_activity_at_session_start]].
+
+## Building a link-based preview (no Artifact tool here)
+
+This session has no Artifact tool (that requires a claude.ai account
+login; this bridge authenticates with a Console API key instead — see
+[[project_telegram_channel_bridge]]). For anything that would normally be
+an Artifact (a landing page draft, a report page) instead of a wall of
+text, deploy it via the existing Vercel pipeline
+(`apps/web/lib/tools/vercel-deploy.ts` → `deployArtifact`, needs only
+`VERCEL_DEPLOY_TOKEN`, already set here) and send the resulting preview
+URL in the Telegram reply.
+
+**Always confirm with the user before deploying** — same rule as the
+terminal session's own ([[feedback_preview_before_vercel_deploy]]): show
+what you're about to build/describe it, get a go-ahead, then deploy.
+
+**Keep every Telegram-originated preview under one folder**,
+`landing-pages/tg-previews/<slug>/`, so they're easy to find and bulk-delete
+later — the user explicitly does not want these to accumulate scattered
+across the repo. Use a short descriptive slug (client name or topic +
+date), not a random ID.
