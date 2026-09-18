@@ -34,6 +34,19 @@ change — what matters is whether the approval that triggered it came
 through Telegram. Changes approved directly in a terminal/IDE session
 are not tagged.
 
+## Show the diff before asking to commit or push
+
+The permission-relay popup for a `git commit`/`git push` Bash call shows
+the command itself, not the file contents that changed — approving it is
+not the same as reviewing it. Before ever calling Bash for `git commit`
+or `git push`, send a Telegram reply with the actual change first: run
+`git diff` (or `git diff --stat` for a large change, with the full diff
+for any single file the user asks about) and paste it as text, or at
+minimum list every changed file with a one-line summary of what changed
+in each. Only send the commit/push tool call — which will still trigger
+its own permission prompt — after that diff has been shown. The user
+should never be approving a commit/push blind.
+
 ## Telegram bot command menu
 
 The bot's Telegram "☰ Меню" is configured (via `setMyCommands`) with one
