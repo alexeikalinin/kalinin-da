@@ -1086,6 +1086,74 @@ export async function setAdStatus(
   }
 }
 
+// Yandex Direct API v5 has NO ad-group-level suspend/resume method —
+// confirmed live 2026-09-23 (adgroups.suspend 200s with error_code 55
+// "Операция не найдена", i.e. the AdGroups service simply doesn't expose
+// that operation, unlike campaigns/ads which both do). The real
+// equivalent of "pause this whole group" is suspending every ad in it
+// (ads.suspend, already covered by setAdStatus above) plus every manual
+// keyword (keywords.suspend) — EXCEPT the autotargeting pseudo-keyword
+// ("---autotargeting"), which keywords.suspend explicitly refuses
+// (error 8305 "Автотаргетинг не может быть остановлен"). In practice
+// that's harmless: autotargeting can only serve through an active ad, so
+// once every ad in the group is suspended the group stops delivering
+// regardless of the autotargeting row's own state — verified 2026-09-23
+// by pulling the group's own report and finding zero impressions since
+// its ads had already been suspended weeks earlier. If a future group
+// still shows fresh impressions after this, the group-level fix is a
+// content/targeting edit (e.g. exclude via campaign negatives), not a
+// status call — there's no "pause the group" button behind the API,
+// only "pause everything currently serving inside it".
+export async function suspendAdGroupServing(
+  adGroupId: string,
+  clientLogin?: string,
+  accessTokenEnv?: string,
+): Promise<{ readonly adsSuspended: readonly string[]; readonly keywordsSuspended: readonly string[]; readonly autotargetingSkipped: boolean }> {
+  const adsResult = (await callDirect(
+    "ads",
+    "get",
+    { SelectionCriteria: { AdGroupIds: [rawId(adGroupId)] }, FieldNames: ["Id", "State"] },
+    clientLogin,
+    accessTokenEnv,
+  )) as { Ads?: ReadonlyArray<{ Id: string; State: string }> };
+  const adsToSuspend = (adsResult.Ads ?? []).filter((a) => a.State !== "SUSPENDED" && a.State !== "OFF").map((a) => String(a.Id));
+  for (const adId of adsToSuspend) {
+    await setAdStatus(adId, "suspend", clientLogin, accessTokenEnv);
+  }
+
+  const kwResult = (await callDirect(
+    "keywords",
+    "get",
+    { SelectionCriteria: { AdGroupIds: [rawId(adGroupId)] }, FieldNames: ["Id", "Keyword", "State"] },
+    clientLogin,
+    accessTokenEnv,
+  )) as { Keywords?: ReadonlyArray<{ Id: string; Keyword: string; State: string }> };
+  const allKeywords = kwResult.Keywords ?? [];
+  let autotargetingSkipped = false;
+  const keywordsToSuspend = allKeywords.filter((k) => {
+    if (k.Keyword === "---autotargeting") {
+      autotargetingSkipped = true;
+      return false;
+    }
+    return k.State !== "SUSPENDED" && k.State !== "OFF";
+  }).map((k) => String(k.Id));
+  if (keywordsToSuspend.length > 0) {
+    const kwSuspendResult = (await callDirect(
+      "keywords",
+      "suspend",
+      { SelectionCriteria: { Ids: keywordsToSuspend.map((id) => rawId(id)) } },
+      clientLogin,
+      accessTokenEnv,
+    )) as { SuspendResults?: ReadonlyArray<{ Errors?: ReadonlyArray<{ Message: string; Details?: string }> }> };
+    const failed = (kwSuspendResult.SuspendResults ?? []).filter((r) => r.Errors && r.Errors.length > 0);
+    if (failed.length > 0) {
+      throw new Error(`Yandex Direct keywords.suspend failed for some keywords in ad group ${adGroupId}: ${JSON.stringify(failed)}`);
+    }
+  }
+
+  return { adsSuspended: adsToSuspend, keywordsSuspended: keywordsToSuspend, autotargetingSkipped };
+}
+
 // Replaces the full Titles[]/Texts[] pool of a RESPONSIVE_AD (up to 7
 // titles / 3 texts) — `ads.update` overwrites the whole array per call, so
 // callers must pass the complete desired pool (existing + new), not just
@@ -1379,6 +1447,13 @@ export interface DirectSearchTermRow {
   readonly adGroupId: string;
   readonly adGroupName: string;
   readonly searchTerm: string;
+  // Autotargeting category this query matched under: EXACT (целевые),
+  // NARROW (узкие), BROADER (широкие), ACCESSORY (сопутствующие),
+  // ALTERNATIVE (альтернативные), COMPETITOR (бренд конкурента), or empty
+  // for a plain keyword match (not autotargeting). Lets a caller pull the
+  // actual queries behind e.g. ALTERNATIVE to judge by eye whether it's
+  // genuinely junk instead of guessing from the category label alone.
+  readonly targetingCategory: string;
   readonly impressions: number;
   readonly clicks: number;
   readonly cost: number;
@@ -1405,7 +1480,7 @@ export async function getSearchTermsReport(
       // Same AUTO-attribution fix as getCampaignReport above — must match
       // the account's actual attribution setting, not the API's default.
       AttributionModels: ["AUTO"],
-      FieldNames: ["CampaignId", "CampaignName", "AdGroupId", "AdGroupName", "Criterion", "Impressions", "Clicks", "Cost", "Conversions"],
+      FieldNames: ["CampaignId", "CampaignName", "AdGroupId", "AdGroupName", "Criterion", "TargetingCategory", "Impressions", "Clicks", "Cost", "Conversions"],
       ReportName: `ama-sqr-${Date.now()}`,
       ReportType: "SEARCH_QUERY_PERFORMANCE_REPORT",
       DateRangeType: "CUSTOM_DATE",
@@ -1433,6 +1508,86 @@ export async function getSearchTermsReport(
       adGroupId: row.AdGroupId,
       adGroupName: row.AdGroupName,
       searchTerm: row.Criterion,
+      targetingCategory: row.TargetingCategory ?? "",
+      impressions: Number(row.Impressions || 0),
+      clicks: Number(row.Clicks || 0),
+      cost: Number(row.Cost || 0),
+      conversionsByGoal,
+    };
+  });
+}
+
+export interface DirectAutotargetingCategoryRow {
+  readonly campaignId: string;
+  readonly campaignName: string;
+  readonly adGroupId: string;
+  // EXACT (целевые), NARROW (узкие), BROADER (широкие), ACCESSORY
+  // (сопутствующие), ALTERNATIVE (альтернативные), COMPETITOR (бренд
+  // конкурента), UNKNOWN (Yandex-internal catch-all), or "" for a plain
+  // keyword match (CriteriaType KEYWORD, not autotargeting).
+  readonly targetingCategory: string;
+  readonly criteriaType: string;
+  readonly impressions: number;
+  readonly clicks: number;
+  readonly cost: number;
+  readonly conversionsByGoal: Record<string, number>;
+}
+
+// Answers "which autotargeting category is actually earning its spend" —
+// the account-level checkboxes (Целевые/Узкие/Широкие/Сопутствующие/
+// Альтернативные + brand mentions) have no per-category performance view
+// in the Direct UI, only this Reports API field exposes it. `TargetingCategory`
+// is a documented-deprecated field (still live as of 2026-09-19, confirmed
+// against ЛОР campaign 707005508) — Yandex may drop it; if a caller sees
+// every row come back with an empty targetingCategory where a campaign is
+// known to have autotargeting live traffic, that's the signal it stopped
+// working, not that autotargeting stopped matching.
+export async function getAutotargetingCategoryReport(
+  clientLogin: string | undefined,
+  params: {
+    readonly campaignId?: string;
+    readonly startDate: string;
+    readonly endDate: string;
+    readonly goalIds: readonly string[];
+  },
+  accessTokenEnv?: string,
+): Promise<readonly DirectAutotargetingCategoryRow[]> {
+  const filter = params.campaignId
+    ? [{ Field: "CampaignId", Operator: "EQUALS", Values: [params.campaignId] }]
+    : undefined;
+  const text = await fetchDirectReport(
+    {
+      SelectionCriteria: { DateFrom: params.startDate, DateTo: params.endDate, ...(filter ? { Filter: filter } : {}) },
+      Goals: params.goalIds,
+      AttributionModels: ["AUTO"],
+      FieldNames: ["CampaignId", "CampaignName", "AdGroupId", "CriteriaType", "TargetingCategory", "Impressions", "Clicks", "Cost", "Conversions"],
+      ReportName: `ama-autotarget-cat-${Date.now()}`,
+      ReportType: "CRITERIA_PERFORMANCE_REPORT",
+      DateRangeType: "CUSTOM_DATE",
+      Format: "TSV",
+      IncludeVAT: "NO",
+      IncludeDiscount: "NO",
+    },
+    clientLogin,
+    accessTokenEnv,
+  );
+
+  const withoutTitle = text.slice(text.indexOf("\n") + 1);
+  const withoutFooter = withoutTitle.replace(/\n?Total rows: \d+\s*$/, "");
+  const rows = parseTsv(withoutFooter);
+
+  return rows.map((row) => {
+    const conversionsByGoal: Record<string, number> = {};
+    for (const goalId of params.goalIds) {
+      const value = row[`Conversions_${goalId}_AUTO`];
+      conversionsByGoal[goalId] = value && value !== "--" ? Number(value) : 0;
+    }
+    return {
+      campaignId: row.CampaignId,
+      campaignName: row.CampaignName,
+      adGroupId: row.AdGroupId,
+      targetingCategory: row.TargetingCategory ?? "",
+      criteriaType: row.CriteriaType ?? "",
       impressions: Number(row.Impressions || 0),
       clicks: Number(row.Clicks || 0),
       cost: Number(row.Cost || 0),

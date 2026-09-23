@@ -11,7 +11,7 @@
 // StarMedia clients get the same per-client Google Sheet treatment.
 import { getSupabase, getSupabaseOwnerTenantId } from "./supabase.ts";
 import { syncAdStats } from "./sync-ad-stats.ts";
-import { readRange, writeRange } from "./tools/google-sheets.ts";
+import { readRange, batchUpdateValues } from "./tools/google-sheets.ts";
 import { sendInternalEmail } from "./tools/email-provider.ts";
 import { resolveAccessContext, type AccessContext } from "./tools/platform-identity.ts";
 import { getWeeklySpendLimit, getDailyBudget } from "./tools/yandex-direct.ts";
@@ -187,42 +187,66 @@ const LOST_IS_THRESHOLD = 0.1; // 10%+ impression share lost to a single cause i
 // a heuristic (autostrategy ceiling vs plain manual bids), not a hard
 // diagnosis — say so in the cell rather than pretending certainty Yandex's
 // API doesn't give us.
+// Yandex Direct enforces a per-account concurrent-connection cap (hit for
+// real 2026-09-21 with unbounded Promise.all across ~35 campaigns × 2 calls
+// each: "error_code":506 "Превышено ограничение на количество соединений").
+// 5 in flight at a time comfortably clears the timeout budget without
+// tripping the limit.
+const YANDEX_BUDGET_CHECK_CONCURRENCY = 5;
+
 async function computeYandexBudgetVerdicts(
   access: AccessContext,
   campaignIds: readonly string[],
   weekCost: ReadonlyMap<string, number>,
 ): Promise<Map<string, BudgetVerdict>> {
   const result = new Map<string, BudgetVerdict>();
-  for (const campaignIdStr of campaignIds) {
-    const campaignId = Number(campaignIdStr);
-    const [weekly, daily] = await Promise.all([
-      getWeeklySpendLimit(campaignId, access.externalAccountId, access.credentialRef),
-      getDailyBudget(campaignId, access.externalAccountId, access.credentialRef),
-    ]);
-    const cost = weekCost.get(campaignIdStr) ?? 0;
-    const weeklyLimit =
-      weekly.weeklySpendLimitMicros != null
-        ? weekly.weeklySpendLimitMicros / 1_000_000
-        : daily.dailyBudgetMicros != null
-          ? (daily.dailyBudgetMicros / 1_000_000) * 7
-          : null;
-    if (!weeklyLimit) {
-      result.set(campaignIdStr, { verdict: "—", detail: "нет фиксированного лимита бюджета/недельного лимита" });
-      continue;
-    }
-    const ratio = cost / weeklyLimit;
-    const pct = Math.round(ratio * 100);
-    if (ratio >= BUDGET_HIGH_RATIO) {
-      result.set(campaignIdStr, { verdict: "🔴 упирается в бюджет", detail: `потрачено ${pct}% недельного лимита — можно увеличить бюджет` });
-    } else if (ratio <= BUDGET_LOW_RATIO) {
-      const hint = weekly.strategyType
-        ? `возможно, ограничение автостратегией «${weekly.strategyType}» (не находит трафик по цели)`
-        : "проверить ставки (может, занижены) или объём спроса — Директ не даёт разделить причины напрямую";
-      result.set(campaignIdStr, { verdict: "🟡 недотрачивает", detail: `потрачено ${pct}% лимита — ${hint}` });
-    } else {
-      result.set(campaignIdStr, { verdict: "🟢 в норме", detail: `${pct}% недельного лимита` });
+  // Was a sequential for-loop (2 live calls per campaign) — for Медавеню's
+  // ~35 Yandex campaigns that alone was enough serial latency to blow the
+  // function timeout (found 2026-09-21). A per-campaign try/catch keeps one
+  // failure from discarding every other campaign's already-computed verdict
+  // (unlike a bare Promise.all, which rejects the whole batch).
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < campaignIds.length) {
+      const campaignIdStr = campaignIds[cursor++];
+      try {
+        const campaignId = Number(campaignIdStr);
+        const [weekly, daily] = await Promise.all([
+          getWeeklySpendLimit(campaignId, access.externalAccountId, access.credentialRef),
+          getDailyBudget(campaignId, access.externalAccountId, access.credentialRef),
+        ]);
+        const cost = weekCost.get(campaignIdStr) ?? 0;
+        const weeklyLimit =
+          weekly.weeklySpendLimitMicros != null
+            ? weekly.weeklySpendLimitMicros / 1_000_000
+            : daily.dailyBudgetMicros != null
+              ? (daily.dailyBudgetMicros / 1_000_000) * 7
+              : null;
+        if (!weeklyLimit) {
+          result.set(campaignIdStr, { verdict: "—", detail: "нет фиксированного лимита бюджета/недельного лимита" });
+          continue;
+        }
+        const ratio = cost / weeklyLimit;
+        const pct = Math.round(ratio * 100);
+        if (ratio >= BUDGET_HIGH_RATIO) {
+          result.set(campaignIdStr, { verdict: "🔴 упирается в бюджет", detail: `потрачено ${pct}% недельного лимита — можно увеличить бюджет` });
+        } else if (ratio <= BUDGET_LOW_RATIO) {
+          const hint = weekly.strategyType
+            ? `возможно, ограничение автостратегией «${weekly.strategyType}» (не находит трафик по цели)`
+            : "проверить ставки (может, занижены) или объём спроса — Директ не даёт разделить причины напрямую";
+          result.set(campaignIdStr, { verdict: "🟡 недотрачивает", detail: `потрачено ${pct}% лимита — ${hint}` });
+        } else {
+          result.set(campaignIdStr, { verdict: "🟢 в норме", detail: `${pct}% недельного лимита` });
+        }
+      } catch (perCampaignError) {
+        result.set(campaignIdStr, {
+          verdict: "—",
+          detail: `ошибка API: ${perCampaignError instanceof Error ? perCampaignError.message : String(perCampaignError)}`,
+        });
+      }
     }
   }
+  await Promise.all(Array.from({ length: Math.min(YANDEX_BUDGET_CHECK_CONCURRENCY, campaignIds.length) }, worker));
   return result;
 }
 
@@ -352,10 +376,17 @@ async function upsertRows(tab: string, rows: readonly ReportRow[]): Promise<void
     }
   }
 
-  for (const w of writes) {
-    const lastCol = String.fromCharCode("A".charCodeAt(0) + w.values.length - 1);
-    await writeRange(MEDAVENUE_SHEET_ID, `${tab}!A${w.row}:${lastCol}${w.row}`, [[...w.values]]);
-  }
+  // One batchUpdate call instead of one writeRange() per row — dozens of
+  // sequential round-trips here (plus the per-campaign budget-verdict calls
+  // above) is what blew the function timeout and silently dropped two
+  // weeks of data (found 2026-09-21).
+  await batchUpdateValues(
+    MEDAVENUE_SHEET_ID,
+    writes.map((w) => {
+      const lastCol = String.fromCharCode("A".charCodeAt(0) + w.values.length - 1);
+      return { range: `${tab}!A${w.row}:${lastCol}${w.row}`, values: [[...w.values]] };
+    }),
+  );
 }
 
 interface VerificationMismatch {

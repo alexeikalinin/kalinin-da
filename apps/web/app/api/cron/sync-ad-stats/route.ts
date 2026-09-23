@@ -3,6 +3,12 @@ import { getSupabase, getSupabaseOwnerTenantId } from "../../../../lib/supabase.
 import { syncAdStats } from "../../../../lib/sync-ad-stats.ts";
 import { syncCampaignStatus } from "../../../../lib/sync-campaign-status.ts";
 
+// Fan-out below does 2 live API calls per active ad account in parallel,
+// but account count keeps growing (Медавеню alone: ~55 campaigns across
+// Yandex+Google as of 2026-09-21) — the platform default timeout isn't
+// enough headroom as more clients/campaigns are added.
+export const maxDuration = 300;
+
 // Vercel Cron target (see vercel.json) — not runnable end-to-end until a
 // real Vercel deployment exists (Backlog #23), but the code is ready in
 // advance so it starts working the moment that deployment lands. Vercel

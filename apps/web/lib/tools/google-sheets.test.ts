@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { createSpreadsheet, readRange, writeRange, appendRows, isGoogleSheetsConfigured } from "./google-sheets.ts";
+import { createSpreadsheet, readRange, writeRange, appendRows, batchUpdateValues, isGoogleSheetsConfigured } from "./google-sheets.ts";
 
 const REAL_FETCH = globalThis.fetch;
 
@@ -89,4 +89,28 @@ test("appendRows POSTs to the :append endpoint with INSERT_ROWS", async () => {
   assert.equal(calls[0].method, "POST");
   assert.match(calls[0].url, /:append\?valueInputOption=RAW&insertDataOption=INSERT_ROWS$/);
   assert.deepEqual(calls[0].body, { values: [["new", "row"]] });
+});
+
+test("batchUpdateValues POSTs all ranges in a single :batchUpdate call", async () => {
+  respond = () => ({});
+  await batchUpdateValues("abc123", [
+    { range: "Sheet1!A2:B2", values: [["a", "b"]] },
+    { range: "Sheet1!A5:B5", values: [["c", "d"]] },
+  ]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST");
+  assert.match(calls[0].url, /\/abc123\/values:batchUpdate$/);
+  assert.deepEqual(calls[0].body, {
+    valueInputOption: "RAW",
+    data: [
+      { range: "Sheet1!A2:B2", values: [["a", "b"]] },
+      { range: "Sheet1!A5:B5", values: [["c", "d"]] },
+    ],
+  });
+});
+
+test("batchUpdateValues is a no-op with an empty update list", async () => {
+  respond = () => ({});
+  await batchUpdateValues("abc123", []);
+  assert.equal(calls.length, 0);
 });

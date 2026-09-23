@@ -71,3 +71,19 @@ export async function appendRows(spreadsheetId: string, range: string, values: u
     { values },
   );
 }
+
+// Writes many non-contiguous ranges in one API call instead of one
+// writeRange() per row — a caller doing dozens of single-row upserts (e.g.
+// the Медавеню weekly report) was hitting function timeouts from the sheer
+// number of sequential round-trips (found 2026-09-21: two weeks silently
+// failed to write for exactly this reason).
+export async function batchUpdateValues(
+  spreadsheetId: string,
+  updates: readonly { readonly range: string; readonly values: unknown[][] }[],
+): Promise<void> {
+  if (updates.length === 0) return;
+  await callSheets(`/${spreadsheetId}/values:batchUpdate`, "POST", {
+    valueInputOption: "RAW",
+    data: updates.map((u) => ({ range: u.range, values: u.values })),
+  });
+}

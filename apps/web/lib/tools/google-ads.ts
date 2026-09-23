@@ -1244,6 +1244,35 @@ export async function adjustAdGroupCriterionBid(
   return { resourceName: data.results[0].resourceName };
 }
 
+export async function setAdGroupStatus(
+  adGroupResourceName: string,
+  status: "ENABLED" | "PAUSED",
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<{ readonly resourceName: string }> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/adGroups:mutate",
+    { operations: [{ update: { resourceName: adGroupResourceName, status }, updateMask: "status" }] },
+    options,
+  )) as { results: ReadonlyArray<{ resourceName: string }> };
+  return { resourceName: data.results[0].resourceName };
+}
+
+export async function removeAdGroupCriterion(
+  adGroupCriterionResourceName: string,
+  customerId: string,
+  options: GoogleAdsCallOptions = {},
+): Promise<{ readonly resourceName: string }> {
+  const data = (await callGoogleAds(
+    customerId,
+    "/adGroupCriteria:mutate",
+    { operations: [{ remove: adGroupCriterionResourceName }] },
+    options,
+  )) as { results: ReadonlyArray<{ resourceName: string }> };
+  return { resourceName: data.results[0].resourceName };
+}
+
 export async function setCampaignStatus(
   campaignResourceName: string,
   status: "ENABLED" | "PAUSED",
